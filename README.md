@@ -9,6 +9,17 @@ pip install ihmtools
 ihmv login          # once; Globus, via the browser
 ```
 
+While only the TestPyPI pre-release exists, the second index is not optional:
+
+```bash
+pip install --index-url https://test.pypi.org/simple/ \
+            --extra-index-url https://pypi.org/simple/ ihmtools
+```
+
+TestPyPI carries its own stale copy of `requests` (2.5.4.1, from 2015), so
+without `--extra-index-url` pip installs that instead of the real one and every
+command dies with `module 'collections' has no attribute 'MutableMapping'`.
+
 Both commands default to the **dev** server; `--mode production` switches.
 
 The examples below live in the repository, so clone it to run them:
