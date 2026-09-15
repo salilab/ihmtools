@@ -152,6 +152,36 @@ ihmdep get_status | awk -F'\t' '!/^#/ && $5 ~ /^Error/ {print $1}'
 
 RIDs come from arguments, from `--rid` (repeatable), or from stdin via `-`.
 
+Restraint data is not handled here. The guide's *Submission Step 3* covers
+uploading it as CSV/TSV through the *Entry Related File* table in the web
+interface.
+
+## The official deposition guide
+
+The [PDB-IHM Deposition and Data Harvesting User Guide][guide] is the
+authoritative documentation: creating a Globus account and joining the
+`pdb-submitter` group, the four submission steps in the web interface, how
+restraint data is uploaded as CSV/TSV through the *Entry Related File* table,
+accession codes and the release process.
+
+Its last section documents the supported **bulk upload** route, which
+`ihmdep` is an alternative to rather than a replacement for:
+
+| | official route | `ihmdep` |
+|---|---|---|
+| tool | `deriva-upload-cli` | this package |
+| layout | files must sit in `~/…/deriva/{globus_id}/entry/` | any path |
+| pairing | `AB-AT.cif` and `AB-AT.png` must share a basename | `--image` names the file |
+| login | `deriva-globus-auth-utils login --refresh` | `ihmdep login` |
+| images | `.png` or `.jpg` | `.png` only |
+| re-upload | same name or md5 is an error | reports the existing RID and stops |
+
+Use whichever suits you. The official route is the one the PDB-IHM team
+supports; if a deposit misbehaves, reproduce it with `deriva-upload-cli`
+before reporting it.
+
+[guide]: https://docs.google.com/document/d/1CM8-6PYqI0DvETeQEfoUpSFZ8BhLrvYnihLSK8ghVcI/edit
+
 ## Notes
 
 The two modules are deliberately self-contained — each can be copied out and
