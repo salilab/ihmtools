@@ -1,0 +1,91 @@
+id,protein1,residue1,protein2,residue2,linker
+1,Histone H2B,24,Histone H2B,28,DSSO
+2,Ubiquitin carboxyl-terminal hydrolase 7,572,Ubiquitin carboxyl-terminal hydrolase 7,580,DSSO
+3,Cellular tumor antigen p53,381,Histone H3.1,8,DSSO
+4,Histone H2B,89,Histone H2A,40,DSSO
+5,Ubiquitin carboxyl-terminal hydrolase 7,572,Ubiquitin carboxyl-terminal hydrolase 7,578,DSSO
+6,Ubiquitin carboxyl-terminal hydrolase 7,958,Ubiquitin carboxyl-terminal hydrolase 7,1046,DSSO
+7,Histone H3.1,60,Histone H2A,79,DSSO
+8,Ubiquitin carboxyl-terminal hydrolase 7,296,Ubiquitin carboxyl-terminal hydrolase 7,580,DSSO
+9,Ubiquitin carboxyl-terminal hydrolase 7,296,Ubiquitin carboxyl-terminal hydrolase 7,572,DSSO
+10,Histone H2B,38,Histone H2A,40,DSSO
+11,Cellular tumor antigen p53,188,Cellular tumor antigen p53,316,DSSO
+12,Ubiquitin carboxyl-terminal hydrolase 7,301,Ubiquitin carboxyl-terminal hydrolase 7,578,DSSO
+13,Histone H3.1,60,Histone H3.1,18,DSSO
+14,Histone H3.1,60,Histone H2A,78,DSSO
+15,Ubiquitin carboxyl-terminal hydrolase 7,301,Ubiquitin carboxyl-terminal hydrolase 7,572,DSSO
+16,Cellular tumor antigen p53,381,Histone H3.1,60,DSSO
+17,Histone H2A,99,Histone H3.1,8,DSSO
+18,Histone H4,81,Histone H3.1,83,DSSO
+19,Histone H3.1,60,Histone H3.1,22,DSSO
+20,Histone H3.1,83,Histone H4,24,DSSO
+21,Histone H2A,99,Histone H4,24,DSSO
+22,Ubiquitin carboxyl-terminal hydrolase 7,1120,Histone H3.1,8,DSSO
+23,Cellular tumor antigen p53,381,Cellular tumor antigen p53,381,DSSO
+24,Ubiquitin carboxyl-terminal hydrolase 7,1120,Ubiquitin carboxyl-terminal hydrolase 7,578,DSSO
+25,Ubiquitin carboxyl-terminal hydrolase 7,958,Ubiquitin carboxyl-terminal hydrolase 7,950,DSSO
+26,Histone H3.1,126,Histone H3.1,22,DSSO
+27,Ubiquitin carboxyl-terminal hydrolase 7,962,Ubiquitin carboxyl-terminal hydrolase 7,950,DSSO
+28,Ubiquitin carboxyl-terminal hydrolase 7,1120,Ubiquitin carboxyl-terminal hydrolase 7,1046,DSSO
+29,Ubiquitin carboxyl-terminal hydrolase 7,278,Histone H3.1,18,DSSO
+30,Cellular tumor antigen p53,345,Cellular tumor antigen p53,381,DSSO
+31,Ubiquitin carboxyl-terminal hydrolase 7,278,Ubiquitin carboxyl-terminal hydrolase 7,334,DSSO
+32,Histone H4,95,Histone H2A,40,DSSO
+33,Ubiquitin carboxyl-terminal hydrolase 7,848,Ubiquitin carboxyl-terminal hydrolase 7,908,DSSO
+34,Cellular tumor antigen p53,375,Histone H3.1,60,DSSO
+35,Ubiquitin carboxyl-terminal hydrolase 7,305,Ubiquitin carboxyl-terminal hydrolase 7,578,DSSO
+36,Ubiquitin carboxyl-terminal hydrolase 7,264,Ubiquitin carboxyl-terminal hydrolase 7,346,DSSO
+37,Histone H4,83,Histone H3.1,83,DSSO
+38,Histone H2B,112,Histone H3.1,83,DSSO
+39,Ubiquitin carboxyl-terminal hydrolase 7,808,Histone H3.1,60,DSSO
+40,Ubiquitin carboxyl-terminal hydrolase 7,893,Ubiquitin carboxyl-terminal hydrolase 7,719,DSSO
+41,Histone H4,95,Histone H2B,38,DSSO
+42,Histone H2B,112,Histone H2A,99,DSSO
+43,Ubiquitin carboxyl-terminal hydrolase 7,296,Ubiquitin carboxyl-terminal hydrolase 7,893,DSSO
+44,Ubiquitin carboxyl-terminal hydrolase 7,865,Ubiquitin carboxyl-terminal hydrolase 7,578,DSSO
+45,Ubiquitin carboxyl-terminal hydrolase 7,1120,Histone H2A,99,DSSO
+46,Ubiquitin carboxyl-terminal hydrolase 7,848,Ubiquitin carboxyl-terminal hydrolase 7,1123,DSSO
+47,Ubiquitin carboxyl-terminal hydrolase 7,865,Ubiquitin carboxyl-terminal hydrolase 7,938,DSSO
+48,Ubiquitin carboxyl-terminal hydrolase 7,763,Histone H3.1,8,DSSO
+49,Histone H4,35,Ubiquitin carboxyl-terminal hydrolase 7,893,DSSO
+50,Ubiquitin carboxyl-terminal hydrolase 7,334,Ubiquitin carboxyl-terminal hydrolase 7,893,DSSO
+51,Histone H3.1,83,Ubiquitin carboxyl-terminal hydrolase 7,893,DSSO
+52,Histone H4,95,Histone H2A,99,DSSO
+53,Ubiquitin carboxyl-terminal hydrolase 7,763,Cellular tumor antigen p53,381,DSSO
+54,Histone H3.1,126,Ubiquitin carboxyl-terminal hydrolase 7,893,DSSO
+55,Histone H2A,99,Ubiquitin carboxyl-terminal hydrolase 7,893,DSSO
+56,Ubiquitin carboxyl-terminal hydrolase 7,278,Ubiquitin carboxyl-terminal hydrolase 7,865,DSSO
+57,Ubiquitin carboxyl-terminal hydrolase 7,278,Ubiquitin carboxyl-terminal hydrolase 7,893,DSSO
+58,Ubiquitin carboxyl-terminal hydrolase 7,1123,Ubiquitin carboxyl-terminal hydrolase 7,893,DSSO
+59,Ubiquitin carboxyl-terminal hydrolase 7,379,Ubiquitin carboxyl-terminal hydrolase 7,893,DSSO
+60,Ubiquitin carboxyl-terminal hydrolase 7,547,Ubiquitin carboxyl-terminal hydrolase 7,346,DSSO
+61,Histone H4,63,Histone H2A,99,DSSO
+62,Histone H4,95,Histone H4,95,DSSO
+63,Ubiquitin carboxyl-terminal hydrolase 7,865,Ubiquitin carboxyl-terminal hydrolase 7,893,DSSO
+64,Cellular tumor antigen p53,381,Cellular tumor antigen p53,397,DSSO
+65,Histone H2A,13,Histone H2A,19,DSSO
+66,Cellular tumor antigen p53,381,Cellular tumor antigen p53,396,DSSO
+67,Histone H4,81,Histone H2B,89,DSSO
+68,Cellular tumor antigen p53,381,Ubiquitin carboxyl-terminal hydrolase 7,172,DSSO
+69,Histone H3.1,60,Histone H3.1,8,DSSO
+70,Histone H2A,99,Histone H3.1,13,DSSO
+71,Ubiquitin carboxyl-terminal hydrolase 7,619,Ubiquitin carboxyl-terminal hydrolase 7,578,DSSO
+72,Histone H4,35,Histone H4,24,DSSO
+73,Histone H3.1,126,Histone H3.1,8,DSSO
+74,Histone H3.1,60,Histone H3.1,27,DSSO
+75,Histone H2A,99,Histone H3.1,18,DSSO
+76,Histone H2B,112,Histone H3.1,8,DSSO
+77,Ubiquitin carboxyl-terminal hydrolase 7,808,Histone H3.1,8,DSSO
+78,Ubiquitin carboxyl-terminal hydrolase 7,619,Ubiquitin carboxyl-terminal hydrolase 7,580,DSSO
+79,Ubiquitin carboxyl-terminal hydrolase 7,278,Ubiquitin carboxyl-terminal hydrolase 7,578,DSSO
+80,Histone H4,83,Histone H4,81,DSSO
+81,Ubiquitin carboxyl-terminal hydrolase 7,908,Ubiquitin carboxyl-terminal hydrolase 7,951,DSSO
+82,Ubiquitin carboxyl-terminal hydrolase 7,122,Ubiquitin carboxyl-terminal hydrolase 7,572,DSSO
+83,Ubiquitin carboxyl-terminal hydrolase 7,1057,Ubiquitin carboxyl-terminal hydrolase 7,336,DSSO
+84,Ubiquitin carboxyl-terminal hydrolase 7,893,Ubiquitin carboxyl-terminal hydrolase 7,572,DSSO
+85,Ubiquitin carboxyl-terminal hydrolase 7,1057,Cellular tumor antigen p53,406,DSSO
+86,Ubiquitin carboxyl-terminal hydrolase 7,808,Histone H3.1,83,DSSO
+87,Ubiquitin carboxyl-terminal hydrolase 7,865,Ubiquitin carboxyl-terminal hydrolase 7,1123,DSSO
+88,Ubiquitin carboxyl-terminal hydrolase 7,865,Histone H4,35,DSSO
+89,Ubiquitin carboxyl-terminal hydrolase 7,865,Histone H3.1,126,DSSO
+90,Ubiquitin carboxyl-terminal hydrolase 7,865,Histone H2A,99,DSSO

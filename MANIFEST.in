@@ -1,0 +1,7 @@
+include README.md
+recursive-include examples *.py *.md
+include examples/data/coordinates.cif examples/data/crosslinks.csv
+include examples/data/restraints.csv examples/data/9A9W.png
+# output, local scratch, and the collection example (11 MB) stay out of the sdist
+exclude examples/data/assembled.cif
+prune examples/data/G_1000003

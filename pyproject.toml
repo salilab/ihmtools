@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ihmtools"
+version = "0.0.1a1"
+description = "Command-line tools for the PDB-IHM validation and deposition systems"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+authors = [{ name = "Arthur Zalevsky", email = "aozalevsky@gmail.com" }]
+keywords = ["pdb-ihm", "deriva", "ermrest", "hatrac", "integrative modeling"]
+dependencies = ["requests"]
+
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.scripts]
+ihmv = "ihmtools.ihmv:main"
+ihmdep = "ihmtools.ihmdep:main"
+
+[project.urls]
+Homepage = "https://github.com/salilab/ihmtools"
+Repository = "https://github.com/salilab/ihmtools"
+"PDB-IHM" = "https://pdb-ihm.org"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

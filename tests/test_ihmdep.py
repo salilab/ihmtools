@@ -1,0 +1,224 @@
+"""Offline tests for the deposition CLI. No network, no credentials."""
+
+import io
+import sys
+import types
+
+import pytest
+
+from ihmtools import ihmdep
+
+
+def entry(workflow, process=None, accession=None):
+    return {"RID": "R", "Workflow_Status": workflow, "Process_Status": process,
+            "Accession_Code": accession}
+
+
+# --------------------------------------------------------------------------
+# Process_Status classification -- by shape, since the vocabulary grows
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("state", [
+    "In progress: processing uploaded mmCIF file",
+    "In progress: generating mmCIF file",
+    "In progress: processing uploaded restraint files",
+    "New (trigger backend process)",
+    "Reprocess (trigger backend process after Error)",
+    "Resume (trigger backend process)",
+    None,
+])
+def test_pending_states(state):
+    assert ihmdep.is_pending(state)
+
+
+@pytest.mark.parametrize("state", [
+    "Error: processing uploaded mmCIF file",
+    "Error: generating mmCIF file",
+    "Error: releasing entry",
+])
+def test_error_states(state):
+    assert ihmdep.is_error(state)
+    assert not ihmdep.is_pending(state)
+
+
+def test_success_is_neither():
+    assert not ihmdep.is_pending("Success")
+    assert not ihmdep.is_error("Success")
+
+
+@pytest.mark.parametrize("rows, expected", [
+    ([("DEPO", "Success")], 0),
+    ([("DEPO", "Error: processing uploaded mmCIF file")], 1),
+    ([("DEPO", "In progress: generating mmCIF file")], 2),
+    ([("DRAFT", None)], 2),
+    # Workflow_Status alone can carry the failure.
+    ([("ERROR", "Success")], 1),
+    # Pending outranks Error across a batch.
+    ([("DEPO", "Error: generating mmCIF file"), ("DEPO", "In progress: releasing entry")], 2),
+])
+def test_status_code(rows, expected):
+    results = [("r%d" % i, entry(w, p)) for i, (w, p) in enumerate(rows)]
+    assert ihmdep.status_code(results) == expected
+
+
+def test_status_code_unknown_outranks_all():
+    results = [("a", entry("DEPO", "In progress: x")), ("b", None)]
+    assert ihmdep.status_code(results) == 3
+
+
+# --------------------------------------------------------------------------
+# delete gate -- everything from SUBMIT onward must be refused
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("workflow", ["DRAFT", "DEPO", "RECORD READY"])
+def test_deletable_before_submit(workflow):
+    assert ihmdep.not_deletable(entry(workflow)) is None
+
+
+@pytest.mark.parametrize("workflow", [
+    "SUBMIT", "mmCIF CREATED", "SUBMISSION COMPLETE",
+    "HOLD", "RELEASE READY", "REL", "ABANDONED",
+])
+def test_not_deletable_from_submit_onward(workflow):
+    assert ihmdep.not_deletable(entry(workflow)) is not None
+
+
+@pytest.mark.parametrize("process", [
+    "Error: processing uploaded mmCIF file",
+    "Error: processing uploaded restraint files",
+])
+def test_error_from_upload_is_deletable(process):
+    """These fail during DEPO, so the entry never left the depositor."""
+    assert ihmdep.not_deletable(entry("ERROR", process)) is None
+
+
+@pytest.mark.parametrize("process", [
+    "Error: generating mmCIF file",        # after SUBMIT
+    "Error: releasing entry",              # after RELEASE READY
+    "Error: generating system files",      # after SUBMISSION COMPLETE
+])
+def test_error_after_submit_is_not_deletable(process):
+    assert ihmdep.not_deletable(entry("ERROR", process)) is not None
+
+
+def test_bare_error_fails_closed():
+    """Nothing proves it was a pre-submit failure, so refuse."""
+    assert ihmdep.not_deletable(entry("ERROR", None)) is not None
+
+
+@pytest.mark.parametrize("workflow", ["DRAFT", "DEPO", "RECORD READY"])
+def test_accession_code_blocks_even_pre_submit(workflow):
+    why = ihmdep.not_deletable(entry(workflow, accession="9XYZ"))
+    assert why is not None and "9XYZ" in why
+
+
+# --------------------------------------------------------------------------
+# policy
+# --------------------------------------------------------------------------
+
+def test_only_depositor_states_are_settable():
+    assert set(ihmdep.USER_SETTABLE) == {"DRAFT", "DEPO", "SUBMIT"}
+    for curator_or_backend in ("REL", "RECORD READY", "ABANDONED", "SUBMISSION COMPLETE"):
+        assert curator_or_backend not in ihmdep.USER_SETTABLE
+
+
+def test_image_extension_restriction_is_ours():
+    """The Image_File_URL annotation carries no filename_ext_filter."""
+    assert ihmdep.IMAGE_EXT == (".png", ".PNG")
+
+
+# --------------------------------------------------------------------------
+# target resolution
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("kwargs, expected", [
+    ({}, "https://data-dev.pdb-ihm.org/ermrest/catalog/99"),
+    ({"mode": "production"}, "https://data.pdb-ihm.org/ermrest/catalog/1"),
+    ({"host": "example.org"}, "https://example.org/ermrest/catalog/99"),
+])
+def test_configure(monkeypatch, kwargs, expected):
+    monkeypatch.delenv("IHMDEP_HOST", raising=False)
+    monkeypatch.delenv("IHMDEP_CATALOG", raising=False)
+    ihmdep.configure(types.SimpleNamespace(**kwargs))
+    assert ihmdep.CAT == expected
+
+
+def _asset(md5_column, prefix):
+    return {
+        "md5": md5_column,
+        "url_pattern": (
+            prefix + '/uid/{{#if _RCB}}{{#regexFindFirst _RCB "[^/]+$"}}{{this}}'
+            '{{/regexFindFirst}}{{else}}{{#regexFindFirst $session.client.id "[^/]+$"}}'
+            '{{this}}{{/regexFindFirst}}{{/if}}/entry/x/{{{%s}}}{{{_%s.filename_ext}}}'
+            % (md5_column, md5_column.replace("_MD5", "_URL"))
+        ),
+    }
+
+
+def test_hatrac_target_handles_both_asset_columns():
+    """mmCIF and image columns name their own md5 field."""
+    mmcif = ihmdep.hatrac_target(_asset("mmCIF_File_MD5", "/hatrac/pdb/submitted"),
+                                 "UID", "MD5", ".cif")
+    image = ihmdep.hatrac_target(_asset("Image_File_MD5", "/hatrac/pdb/submitted"),
+                                 "UID", "MD5", ".png")
+    assert mmcif == "/hatrac/pdb/submitted/uid/UID/entry/x/MD5.cif"
+    assert image == "/hatrac/pdb/submitted/uid/UID/entry/x/MD5.png"
+
+
+def test_hatrac_target_refuses_unknown_field():
+    bad = {"md5": "mmCIF_File_MD5", "url_pattern": "/hatrac/x/{{{Unexpected}}}"}
+    with pytest.raises(SystemExit):
+        ihmdep.hatrac_target(bad, "UID", "MD5", ".cif")
+
+
+# --------------------------------------------------------------------------
+# CLI parsing
+# --------------------------------------------------------------------------
+
+def parse(argv):
+    """Parse without running anything, by intercepting the dispatch."""
+    import contextlib
+    import io
+    captured = {}
+    real = {}
+    for name in ("do_status", "do_run", "do_download", "do_upload",
+                 "do_set_status", "do_delete", "do_login"):
+        real[name] = getattr(ihmdep, name)
+        setattr(ihmdep, name, lambda a, _n=name: captured.update(func=_n, args=a))
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            ihmdep.main()
+    finally:
+        for name, fn in real.items():
+            setattr(ihmdep, name, fn)
+    return captured["args"]
+
+
+@pytest.mark.parametrize("argv, rids", [
+    # A numeric RID after --wait used to be eaten as the poll interval, which
+    # left no RIDs and silently listed everything with exit 0.
+    (["get_status", "--wait", "300"], ["300"]),
+    (["get_status", "--wait", "9-DXAM"], ["9-DXAM"]),
+    (["get_status", "--wait", "-"], ["-"]),
+    (["get_status", "300", "--wait"], ["300"]),
+    (["get_status", "--wait", "--interval", "60", "300"], ["300"]),
+])
+def test_wait_never_swallows_a_rid(monkeypatch, argv, rids):
+    monkeypatch.setattr(sys, "argv", ["ihmdep"] + argv)
+    args = parse(argv)
+    assert args.rids == rids
+    assert args.wait is True
+
+
+def test_wait_defaults_and_overrides(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["ihmdep", "get_status", "--wait", "300"])
+    assert parse(None).interval == 30
+    monkeypatch.setattr(sys, "argv",
+                        ["ihmdep", "get_status", "--wait", "--interval", "5", "300"])
+    assert parse(None).interval == 5
+
+
+def test_no_wait_by_default(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["ihmdep", "get_status", "300"])
+    args = parse(None)
+    assert args.rids == ["300"] and args.wait is False

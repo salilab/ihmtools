@@ -1,0 +1,10 @@
+# Written by assemble.py
+data/assembled.cif
+
+# Written by the collection example
+data/G_*/reports/
+data/G_*/generated/
+data/G_*/rids*.txt
+
+# Local scratch: the released entry as downloaded
+data/9A9W.cif
