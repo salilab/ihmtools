@@ -6,4 +6,4 @@ run on its own. They duplicate their auth and HTTP layers rather than sharing
 one, so a fix to either must be applied to both.
 """
 
-__version__ = "0.0.1a1"
+__version__ = "0.0.1a2"
