@@ -24,7 +24,13 @@ TestPyPI carries its own stale copy of `requests` (2.5.4.1, from 2015), so
 without `--extra-index-url` pip installs that instead of the real one and every
 command dies with `module 'collections' has no attribute 'MutableMapping'`.
 
-Both commands default to the **dev** server; `--mode production` switches.
+`ihmv` defaults to the **dev** server and `ihmdep` to **production**; `--mode`
+switches either.
+
+`ihmdep` allows only the two transitions a depositor drives — `DRAFT -> DEPO`
+and `RECORD READY -> SUBMIT` — and deletes only `DRAFT` or `DEPO` entries.
+Anything further along is deleted from the web interface, which has the
+context to do it safely; these tools deliberately do not.
 
 The examples below live in the repository, so clone it to run them:
 
@@ -56,9 +62,9 @@ ihmdep logout                                 revoke those credentials and forge
 ihmdep upload model.cif --image model.png     deposit an entry
 ihmdep run model.cif                          deposit and block
 ihmdep get_status                             list entries, newest first
-ihmdep set_status 9-DXAM --to SUBMIT          DRAFT / DEPO / SUBMIT only
+ihmdep set_status 9-DXAM --to SUBMIT          DRAFT->DEPO, RECORD READY->SUBMIT
 ihmdep download 9-DXAM                        fetch generated reports
-ihmdep delete 9-DXAM                          pre-submit entries only
+ihmdep delete 9-DXAM                          DRAFT or DEPO only
 ```
 
 ## Preparing an entry from raw files
@@ -162,14 +168,19 @@ spectrometry and deep learning" — with their coordinates and images:
 cd examples/G_1000003             # from the repository root
 
 for id in 9A40 9A6P 9A7U; do
-    ihmdep upload "$id.cif" --image "$id.png"
+    ihmdep --mode dev upload "$id.cif" --image "$id.png"
 done > rids.txt
 
-ihmdep get_status --wait - < rids.txt &&
-ihmdep set_status --to SUBMIT --yes - < rids.txt &&
-ihmdep get_status --wait - < rids.txt &&
-ihmdep download --mmcif -o generated/ - < rids.txt
+ihmdep --mode dev get_status --wait - < rids.txt &&
+ihmdep --mode dev set_status --to SUBMIT --yes - < rids.txt &&
+ihmdep --mode dev get_status --wait - < rids.txt &&
+ihmdep --mode dev download --mmcif -o generated/ - < rids.txt
 ```
+
+`--mode dev` is spelled out because `ihmdep` now defaults to production, and a
+worked example should not deposit to the live archive. `set_status --to SUBMIT`
+requires every entry to be `RECORD READY`, which is what the preceding
+`get_status --wait` establishes.
 
 A failed upload prints no RID, so it drops out of the batch rather than
 stopping it, and re-running the loop picks up the existing RIDs instead of

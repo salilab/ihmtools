@@ -70,43 +70,30 @@ def test_status_code_unknown_outranks_all():
 # delete gate -- everything from SUBMIT onward must be refused
 # --------------------------------------------------------------------------
 
-@pytest.mark.parametrize("workflow", ["DRAFT", "DEPO", "RECORD READY"])
-def test_deletable_before_submit(workflow):
+@pytest.mark.parametrize("workflow", ["DRAFT", "DEPO"])
+def test_deletable_before_the_backend_produces_a_record(workflow):
     assert ihmdep.not_deletable(entry(workflow)) is None
 
 
 @pytest.mark.parametrize("workflow", [
-    "SUBMIT", "mmCIF CREATED", "SUBMISSION COMPLETE",
+    "RECORD READY", "SUBMIT", "mmCIF CREATED", "SUBMISSION COMPLETE",
     "HOLD", "RELEASE READY", "REL", "ABANDONED",
 ])
-def test_not_deletable_from_submit_onward(workflow):
+def test_not_deletable_once_processed(workflow):
     assert ihmdep.not_deletable(entry(workflow)) is not None
 
 
 @pytest.mark.parametrize("process", [
-    "Error: processing uploaded mmCIF file",
-    "Error: processing uploaded restraint files",
+    "Error: processing uploaded mmCIF file",     # failed during DEPO
+    "Error: generating mmCIF file",              # failed after SUBMIT
+    None,
 ])
-def test_error_from_upload_is_deletable(process):
-    """These fail during DEPO, so the entry never left the depositor."""
-    assert ihmdep.not_deletable(entry("ERROR", process)) is None
-
-
-@pytest.mark.parametrize("process", [
-    "Error: generating mmCIF file",        # after SUBMIT
-    "Error: releasing entry",              # after RELEASE READY
-    "Error: generating system files",      # after SUBMISSION COMPLETE
-])
-def test_error_after_submit_is_not_deletable(process):
+def test_error_is_never_deletable(process):
+    """ERROR is out regardless of where it failed."""
     assert ihmdep.not_deletable(entry("ERROR", process)) is not None
 
 
-def test_bare_error_fails_closed():
-    """Nothing proves it was a pre-submit failure, so refuse."""
-    assert ihmdep.not_deletable(entry("ERROR", None)) is not None
-
-
-@pytest.mark.parametrize("workflow", ["DRAFT", "DEPO", "RECORD READY"])
+@pytest.mark.parametrize("workflow", ["DRAFT", "DEPO"])
 def test_accession_code_blocks_even_pre_submit(workflow):
     why = ihmdep.not_deletable(entry(workflow, accession="9XYZ"))
     assert why is not None and "9XYZ" in why
@@ -116,10 +103,12 @@ def test_accession_code_blocks_even_pre_submit(workflow):
 # policy
 # --------------------------------------------------------------------------
 
-def test_only_depositor_states_are_settable():
-    assert set(ihmdep.USER_SETTABLE) == {"DRAFT", "DEPO", "SUBMIT"}
-    for curator_or_backend in ("REL", "RECORD READY", "ABANDONED", "SUBMISSION COMPLETE"):
-        assert curator_or_backend not in ihmdep.USER_SETTABLE
+def test_only_two_transitions_are_settable():
+    """A depositor drives DRAFT -> DEPO and RECORD READY -> SUBMIT, nothing else."""
+    assert ihmdep.TRANSITIONS == {"DEPO": "DRAFT", "SUBMIT": "RECORD READY"}
+    assert set(ihmdep.USER_SETTABLE) == {"DEPO", "SUBMIT"}
+    for backend_or_curator in ("REL", "RECORD READY", "ABANDONED", "DRAFT"):
+        assert backend_or_curator not in ihmdep.USER_SETTABLE
 
 
 def test_image_extension_restriction_is_ours():
@@ -132,9 +121,11 @@ def test_image_extension_restriction_is_ours():
 # --------------------------------------------------------------------------
 
 @pytest.mark.parametrize("kwargs, expected", [
-    ({}, "https://data-dev.pdb-ihm.org/ermrest/catalog/99"),
+    # production is the default for the deposition system
+    ({}, "https://data.pdb-ihm.org/ermrest/catalog/1"),
     ({"mode": "production"}, "https://data.pdb-ihm.org/ermrest/catalog/1"),
-    ({"host": "example.org"}, "https://example.org/ermrest/catalog/99"),
+    ({"mode": "dev"}, "https://data-dev.pdb-ihm.org/ermrest/catalog/99"),
+    ({"host": "example.org"}, "https://example.org/ermrest/catalog/1"),
 ])
 def test_configure(monkeypatch, kwargs, expected):
     monkeypatch.delenv("IHMDEP_HOST", raising=False)

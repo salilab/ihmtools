@@ -18,7 +18,7 @@ Listings are aligned on a terminal and tab-separated when piped, with a
 '#'-prefixed header, so columns containing spaces still split cleanly:
     ihmdep.py get_status | awk -F'\t' '!/^#/ && $5 ~ /^Error/ {print $1}'
 
-Targets the dev server (catalog 99) unless --mode production / --host / --catalog
+Targets the production server (catalog 1) unless --mode dev / --host / --catalog
 says otherwise; those may be given before or after the subcommand.
 """
 
@@ -39,7 +39,7 @@ MODES = {
     "dev": ("https://data-dev.pdb-ihm.org", "99"),
     "production": ("https://data.pdb-ihm.org", "1"),
 }
-DEFAULT_MODE = "dev"
+DEFAULT_MODE = "production"
 
 # Set by configure() before any command runs.
 HOST, CAT = None, None
@@ -86,21 +86,18 @@ PENDING_EXACT = {
 }
 DONE = "Success"
 
-# Deletable only while the entry is still the depositor's, i.e. before SUBMIT.
-PRE_SUBMIT = ("DRAFT", "DEPO", "RECORD READY")
-# ERROR is not on that list because it spans the whole lifecycle: an entry can
-# reach it from DEPO, from SUBMIT, or from SUBMISSION COMPLETE, and none of
-# those carry an accession code to tell them apart. Process_Status is what says
-# where it failed, and only a failure during DEPO is pre-submit.
-PRE_SUBMIT_ERRORS = (
-    "Error: processing uploaded mmCIF file",
-    "Error: processing uploaded restraint files",
-)
+# Deletable only while the entry is still purely the depositor's: before the
+# backend has produced a record from it.
+PRE_SUBMIT = ("DRAFT", "DEPO")
 
-# The vocabulary has 11 values, but a depositor only drives these three:
-# DRAFT (editing), DEPO (hand it to the backend), SUBMIT (hand it to curation).
-# The rest are written by the backend or by curators, so the tool won't set them.
-USER_SETTABLE = ("DRAFT", "DEPO", "SUBMIT")
+# A depositor drives exactly two transitions, and each is only legal from one
+# state: hand a draft to the backend, then hand a processed record to curation.
+# Everything else in the vocabulary is written by the backend or by curators.
+TRANSITIONS = {
+    "DEPO": "DRAFT",            # DRAFT  -> DEPO
+    "SUBMIT": "RECORD READY",   # RECORD READY -> SUBMIT
+}
+USER_SETTABLE = tuple(TRANSITIONS)
 
 
 class NeedLogin(Exception):
@@ -650,6 +647,15 @@ def do_set_status(args):
                 print("%s: unknown RID" % rid, file=sys.stderr)
         sys.exit(3)
 
+    required = TRANSITIONS[args.to]
+    wrong = [(rid, row["Workflow_Status"]) for rid, row in results
+             if row["Workflow_Status"] != required]
+    if wrong:
+        for rid, state in wrong:
+            print("  %s: is %s, but --to %s is only allowed from %s"
+                  % (rid, state, args.to, required), file=sys.stderr)
+        sys.exit("no records changed")
+
     for rid, row in results:
         print("  %s  %s -> %s" % (rid, row["Workflow_Status"], args.to), file=sys.stderr)
     if not args.yes and not confirm("Apply to %d record(s)? [y/N] " % len(rids)):
@@ -673,12 +679,7 @@ def not_deletable(row):
     state = row["Workflow_Status"]
     if state in PRE_SUBMIT:
         return None
-    if state == "ERROR":
-        process = row["Process_Status"] or "(none)"
-        if process in PRE_SUBMIT_ERRORS:
-            return None
-        return "is ERROR from %r, which happens after SUBMIT" % process
-    return "is %s, past pre-submit" % state
+    return "is %s; only %s may be deleted" % (state, " and ".join(PRE_SUBMIT))
 
 
 def do_delete(args):
@@ -705,9 +706,9 @@ def do_delete(args):
     if blocked:
         for rid, why in blocked:
             print("  %s: refusing to delete -- %s" % (rid, why), file=sys.stderr)
-        sys.exit("deletable only while %s (or ERROR from a failed upload), and without an "
-                 "accession code.\nTo retire a submitted entry use: %s set_status <RID> "
-                 "--to ABANDONED" % (" / ".join(PRE_SUBMIT), sys.argv[0]))
+        sys.exit("deletable here only while %s, and without an accession code.\n"
+                 "Further along, delete it from the web interface instead: %s"
+                 % (" or ".join(PRE_SUBMIT), HOST))
 
     for rid in rids:
         row = found[rid]
@@ -801,8 +802,8 @@ def main():
     common = argparse.ArgumentParser(add_help=False, argument_default=argparse.SUPPRESS)
     g = common.add_argument_group("server")
     g.add_argument("--mode", choices=["dev", "production"],
-                   help="dev = %s catalog %s (default); production = %s catalog %s"
-                        % (MODES["dev"] + MODES["production"]))
+                   help="production = %s catalog %s (default); dev = %s catalog %s"
+                        % (MODES["production"] + MODES["dev"]))
     g.add_argument("--host", metavar="HOST", help="override the server hostname")
     g.add_argument("--catalog", metavar="ID", help="override the catalog number")
 
@@ -868,13 +869,12 @@ def main():
     q.add_argument("--rid", action="append", dest="rid_flags", metavar="RID",
                    help="same as a positional RID; may be repeated")
     q.add_argument("--to", required=True, choices=list(USER_SETTABLE),
-                   help="target Workflow_Status; the other values in the vocabulary are "
-                        "written by the backend or by curators")
+                   help="DEPO (only from DRAFT) or SUBMIT (only from RECORD READY); "
+                        "every other value is written by the backend or by curators")
     q.add_argument("-y", "--yes", action="store_true", help="skip the confirmation prompt")
     q.set_defaults(func=do_set_status)
 
-    q = add("delete", help="delete pre-submit entries (DRAFT/DEPO/RECORD READY, or "
-                           "ERROR from a failed upload)")
+    q = add("delete", help="delete entries, DRAFT or DEPO only")
     q.add_argument("rids", nargs="*", metavar="RID",
                    help="one or more RIDs, or '-' to read them from stdin")
     q.add_argument("--rid", action="append", dest="rid_flags", metavar="RID",
