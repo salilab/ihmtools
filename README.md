@@ -7,7 +7,11 @@ records, Hatrac for files — so the only dependency is `requests`.
 ```bash
 pip install ihmtools
 ihmv login          # once; Globus, via the browser
+ihmv logout         # revokes at Globus, then forgets the token
 ```
+
+Both commands share one credential store, so logging in or out of either
+affects both.
 
 While only the TestPyPI pre-release exists, the second index is not optional:
 
@@ -33,6 +37,8 @@ pip install -e .
 ## `ihmv` — validation catalog
 
 ```
+ihmv login                           authenticate with Globus, once
+ihmv logout                          revoke those credentials and forget them
 ihmv upload model.cif                submit a structure for validation
 ihmv run model.cif                   upload and block until it finishes
 ihmv get_status                      list entries, newest first
@@ -45,12 +51,14 @@ ihmv delete 2Y0                      remove a record and its reports
 ## `ihmdep` — deposition system
 
 ```
-ihmdep upload model.cif --image model.png      deposit an entry
-ihmdep run model.cif                           deposit and block
-ihmdep get_status                              list entries, newest first
-ihmdep set_status 9-DXAM --to SUBMIT           DRAFT / DEPO / SUBMIT only
-ihmdep download 9-DXAM                         fetch generated reports
-ihmdep delete 9-DXAM                           pre-submit entries only
+ihmdep login                                  authenticate with Globus, once
+ihmdep logout                                 revoke those credentials and forget them
+ihmdep upload model.cif --image model.png     deposit an entry
+ihmdep run model.cif                          deposit and block
+ihmdep get_status                             list entries, newest first
+ihmdep set_status 9-DXAM --to SUBMIT          DRAFT / DEPO / SUBMIT only
+ihmdep download 9-DXAM                        fetch generated reports
+ihmdep delete 9-DXAM                          pre-submit entries only
 ```
 
 ## Preparing an entry from raw files

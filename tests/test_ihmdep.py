@@ -235,3 +235,71 @@ def test_broken_pipe_is_not_a_traceback(monkeypatch, capsys):
         ihmdep.main()
     assert caught.value.code == 141
     assert "Traceback" not in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------
+# logout
+# --------------------------------------------------------------------------
+
+TOKEN = {"access_token": "a", "refresh_token": "r", "expires_at_seconds": 9e11,
+         "scope": "https://auth.globus.org/scopes/x/deriva_all"}
+
+
+def logged_in(tmp_path, monkeypatch):
+    import json as _json
+    store = tmp_path / "tokens.json"
+    store.write_text(_json.dumps(TOKEN))
+    monkeypatch.setattr(ihmdep, "OUR_TOKENS", str(store))
+    monkeypatch.setattr(ihmdep, "DERIVA_TOKENS", str(tmp_path / "absent.json"))
+    return store
+
+
+def test_logout_revokes_then_deletes(tmp_path, monkeypatch, capsys):
+    store = logged_in(tmp_path, monkeypatch)
+    revoked = []
+    monkeypatch.setattr(ihmdep, "_revoke", lambda t: revoked.append(t) or True)
+
+    ihmdep.do_logout(types.SimpleNamespace(local=False))
+    assert sorted(revoked) == ["a", "r"], "both tokens must be revoked"
+    assert not store.exists()
+
+
+def test_logout_local_does_not_contact_globus(tmp_path, monkeypatch):
+    store = logged_in(tmp_path, monkeypatch)
+
+    def fail(_token):
+        raise AssertionError("--local must not reach the network")
+
+    monkeypatch.setattr(ihmdep, "_revoke", fail)
+    ihmdep.do_logout(types.SimpleNamespace(local=True))
+    assert not store.exists()
+
+
+def test_logout_deletes_even_if_revocation_fails(tmp_path, monkeypatch, capsys):
+    """The user asked to be logged out; an unreachable Globus must not block it."""
+    store = logged_in(tmp_path, monkeypatch)
+    monkeypatch.setattr(ihmdep, "_revoke", lambda t: False)
+
+    ihmdep.do_logout(types.SimpleNamespace(local=False))
+    assert not store.exists()
+    assert "could not revoke" in capsys.readouterr().err
+
+
+def test_logout_when_not_logged_in(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(ihmdep, "OUR_TOKENS", str(tmp_path / "absent.json"))
+    monkeypatch.setattr(ihmdep, "DERIVA_TOKENS", str(tmp_path / "also-absent.json"))
+    ihmdep.do_logout(types.SimpleNamespace(local=False))
+    assert "not logged in" in capsys.readouterr().err
+
+
+def test_logout_reports_derivas_own_store(tmp_path, monkeypatch, capsys):
+    """We read deriva-py's file but never write it, so we must not delete it."""
+    import json as _json
+    deriva = tmp_path / "deriva.json"
+    deriva.write_text(_json.dumps({"usc_isrd": TOKEN}))
+    monkeypatch.setattr(ihmdep, "OUR_TOKENS", str(tmp_path / "absent.json"))
+    monkeypatch.setattr(ihmdep, "DERIVA_TOKENS", str(deriva))
+
+    ihmdep.do_logout(types.SimpleNamespace(local=False))
+    assert deriva.exists(), "deriva-py's store is not ours to remove"
+    assert "deriva-globus-auth-utils logout" in capsys.readouterr().err

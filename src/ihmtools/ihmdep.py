@@ -226,6 +226,40 @@ def do_login(args):
     sys.exit("login succeeded but no deriva_all token was granted")
 
 
+def _revoke(token):
+    """Ask Globus to invalidate a token. Returns True if it is now dead."""
+    r = requests.post(AUTH + "/token/revoke", timeout=30,
+                      data={"token": token, "client_id": CLIENT_ID})
+    return r.ok
+
+
+def do_logout(args):
+    """Revoke our tokens at Globus and forget them.
+
+    Deleting the file alone would leave a working token behind for anything
+    that had already copied it, so revoke first; but still delete locally even
+    if Globus cannot be reached, because the user asked to be logged out.
+    """
+    if not os.path.exists(OUR_TOKENS):
+        print("not logged in (%s does not exist)" % OUR_TOKENS, file=sys.stderr)
+    else:
+        entry = json.load(open(OUR_TOKENS))
+        if not args.local:
+            for kind in ("refresh_token", "access_token"):
+                token = entry.get(kind)
+                if token:
+                    print("  %s %s" % ("revoked" if _revoke(token) else "could not revoke",
+                                       kind.replace("_", " ")), file=sys.stderr)
+        os.remove(OUR_TOKENS)
+        print("removed %s" % OUR_TOKENS)
+
+    # deriva-py keeps its own store, which we read but never write.
+    if _stored_token() is not None:
+        print("Still authenticated via %s, which this tool does not manage.\n"
+              "To clear that too: deriva-globus-auth-utils logout" % DERIVA_TOKENS,
+              file=sys.stderr)
+
+
 # --------------------------------------------------------------------------
 # http
 # --------------------------------------------------------------------------
@@ -795,6 +829,11 @@ def main():
     q = add("login", help="authenticate with Globus")
     q.add_argument("--no-browser", action="store_true", help="just print the URL")
     q.set_defaults(func=do_login)
+
+    q = add("logout", help="revoke the stored credentials and forget them")
+    q.add_argument("--local", action="store_true",
+                   help="only delete the local file; leave the token valid at Globus")
+    q.set_defaults(func=do_logout)
 
     q = deposit_args(add("upload", help="deposit an entry"))
     q.set_defaults(func=do_upload)
