@@ -1,6 +1,9 @@
 # Written by the assemble scripts
 */data/assembled.cif
 
+# Scratch copies of a collection
+G_*_test/
+
 # Written by the collection example
 G_*/reports/
 G_*/generated/

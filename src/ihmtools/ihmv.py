@@ -763,6 +763,15 @@ def main():
         sys.exit("Not authenticated (%s).\nRun: %s login" % (e, sys.argv[0]))
     except KeyboardInterrupt:
         sys.exit(130)
+    except BrokenPipeError:
+        # Something downstream stopped reading -- `| head` is the usual case.
+        # Point stdout at /dev/null so the interpreter's final flush cannot
+        # raise again, then exit the way a program killed by SIGPIPE would.
+        try:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        except OSError:
+            pass        # stdout is not a real file descriptor; nothing to do
+        sys.exit(128 + 13)
 
 
 if __name__ == "__main__":

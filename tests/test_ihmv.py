@@ -244,3 +244,17 @@ def test_no_wait_by_default(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["ihmv", "get_status", "300"])
     args = parse(None)
     assert args.rids == ["300"] and args.wait is False
+
+
+def test_broken_pipe_is_not_a_traceback(monkeypatch, capsys):
+    """`ihmv get_status | head` closes the pipe; that is normal, not a crash."""
+    def explode(_args):
+        raise BrokenPipeError(32, "Broken pipe")
+
+    monkeypatch.setattr(ihmv, "do_status", explode)
+    monkeypatch.setattr(sys, "argv", ["ihmv", "get_status"])
+    with pytest.raises(SystemExit) as caught:
+        ihmv.main()
+    # 128 + SIGPIPE, the status a program killed by SIGPIPE reports
+    assert caught.value.code == 141
+    assert "Traceback" not in capsys.readouterr().err
