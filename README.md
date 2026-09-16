@@ -56,38 +56,60 @@ ihmdep delete 9-DXAM                           pre-submit entries only
 ## Preparing an entry from raw files
 
 `examples/` builds a depositable IHM mmCIF out of what an experimenter
-actually has, using PDB-IHM entry **9A9W** — "USP7 bound to a nucleosome/p53
-complex": histones, two DNA strands, p53, USP7 and four zincs, with DSSO
-crosslinking MS and a 3DEM map.
+actually has. There are two, covering the two kinds of integrative model:
+
+| | |
+|---|---|
+| `examples/9A9W/` | **atomic** — USP7 bound to a nucleosome/p53 complex, 51729 atoms, DSSO crosslinks and a 3DEM map |
+| `examples/9A8W/` | **coarse-grained** — human SNAPc-DNA from IMP, 1663 spheres, SDA crosslinks and a 3DEM map |
+
+The examples need two libraries **`ihmtools` does not depend on** and
+`pip install ihmtools` will not bring in — [gemmi][] for reading coordinates
+and [python-ihm][] for writing the entry:
 
 ```bash
-pip install gemmi ihm             # the example needs these two; the CLIs do not
-cd examples                       # from the repository root
+pip install gemmi ihm
+```
 
-python assemble.py                # writes data/assembled.cif
+Then, from the repository root:
+
+```bash
+# atomic
+cd examples/9A9W
+python assemble.py                                          # writes data/assembled.cif
 ihmdep upload data/assembled.cif --image data/9A9W.png
 ```
 
-`assemble.py` reads three files and derives everything else with python-ihm —
-entities with the right alphabet for protein, DNA and the zinc ligand, one
-asym unit per chain copy, an atomic representation over the residues actually
-observed, the datasets, both restraints, the protocol, and the model:
+```bash
+# coarse-grained
+cd examples/9A8W
+python assemble.py                                          # writes data/assembled.cif
+ihmdep upload data/assembled.cif --image data/9A8W.png
+```
 
-| file | what it is |
-|---|---|
-| `data/coordinates.cif` | the model, with no IHM metadata at all |
-| `data/crosslinks.csv` | `id,protein1,residue1,protein2,residue2,linker` |
-| `data/restraints.csv` | `crosslink_id,chain1,chain2` |
-| `data/9A9W.png` | the entry image, for the deposit |
+[gemmi]: https://gemmi.readthedocs.io
+[python-ihm]: https://python-ihm.readthedocs.io
 
-For your own system these come from your pipeline. 9A9W's are checked in, so
-the example runs on a fresh clone; they were recovered from the released entry
-by stripping every `_ihm*` category from `pdb-ihm.org/cif/9A9W.cif`, taking the
-two crosslink tables from `_ihm_cross_link_list` and
-`_ihm_cross_link_restraint`, and fetching `pdb-ihm.org/images/9a9w.png`
-(lowercase id).
+Each `assemble.py` reads the files in its own `data/` and derives everything
+else with python-ihm: the entities and their sequences, one asym unit per
+chain copy, the representation, the datasets, both restraints, the modelling
+protocol, and the model itself.
 
-The crosslinks are two files because mmCIF keeps them apart and so does the
+| | 9A9W | 9A8W |
+|---|---|---|
+| the model | `coordinates.cif` — atoms | `model.cif` — spheres in `_ihm_sphere_obj_site` |
+| measurements | `crosslinks.csv` — `id,protein1,residue1,protein2,residue2,linker` | same |
+| restraints | `restraints.csv` — `crosslink_id,chain1,chain2` | plus a `granularity` column |
+| image | `9A9W.png` | `9A8W.png` |
+
+Both sets are checked in, so either example runs on a fresh clone. They were
+recovered from the released entries: the coordinates by keeping only what
+describes the model, the two crosslink tables from `_ihm_cross_link_list` and
+`_ihm_cross_link_restraint`, and the images from `pdb-ihm.org/images/9a9w.png`
+and `.../9a8w.png` (lowercase ids). For your own system they come from your
+pipeline.
+
+**Why the crosslinks are two files.** mmCIF keeps them apart and so does the
 science. `crosslinks.csv` is what the experiment measured — protein and
 residue, with no idea which copy. `restraints.csv` is what the modelling
 actually restrained: the chain pair, for the subset used. For 9A9W those are
@@ -97,9 +119,14 @@ measure to — and the copy assignment can't be recovered from a measurement at
 all: "H2B residue 24 to H2B residue 28" doesn't say *which* H2B, and there are
 two of each histone and four p53.
 
-The result matches the original where it should: identical atoms and
-sequences, both crosslink categories row for row, and it validates against
-`mmcif_ihm.dic` + `mmcif_pdbx_v50.dic`.
+**Why 9A8W needs a third column.** Its restraints are 127 by-residue and 124
+by-feature, because a bead spanning several residues cannot be restrained at
+one of them. That distinction exists only in a coarse-grained model, and no
+measurement records it.
+
+Both reproduce their entry: identical sequences, identical coordinates —
+atoms for 9A9W, all 1663 spheres for 9A8W — both crosslink tables row for row,
+and both validate against `mmcif_ihm.dic` + `mmcif_pdbx_v50.dic`.
 
 ## Scripting
 
@@ -119,12 +146,12 @@ Depositing several entries works the same way. `upload` prints nothing but
 the RID on stdout, so the loop's output is the RID list, and every later
 command reads it back with `-`.
 
-`examples/data/G_1000003/` holds three entries from one PDB-IHM collection —
+`examples/G_1000003/` holds three entries from one PDB-IHM collection —
 9A40, 9A6P and 9A7U, from "Modelling protein complexes with crosslinking mass
 spectrometry and deep learning" — with their coordinates and images:
 
 ```bash
-cd examples/data/G_1000003        # from the repository root
+cd examples/G_1000003             # from the repository root
 
 for id in 9A40 9A6P 9A7U; do
     ihmdep upload "$id.cif" --image "$id.png"
