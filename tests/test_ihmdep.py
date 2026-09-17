@@ -294,3 +294,25 @@ def test_logout_reports_derivas_own_store(tmp_path, monkeypatch, capsys):
     ihmdep.do_logout(types.SimpleNamespace(local=False))
     assert deriva.exists(), "deriva-py's store is not ours to remove"
     assert "deriva-globus-auth-utils logout" in capsys.readouterr().err
+
+
+def test_broken_pipe_while_flushing_is_not_a_traceback(monkeypatch, capsys):
+    """Output that fits the buffer only fails when the interpreter flushes at
+    shutdown, where nothing can catch it -- so main() must flush itself."""
+    class ClosedPipe:
+        def write(self, _text):
+            return 0                      # buffered, no error yet
+
+        def flush(self):
+            raise BrokenPipeError(32, "Broken pipe")
+
+        def isatty(self):
+            return False
+
+    monkeypatch.setattr(ihmdep, "do_status", lambda a: None)
+    monkeypatch.setattr(sys, "argv", ["ihmdep", "get_status"])
+    monkeypatch.setattr(sys, "stdout", ClosedPipe())
+
+    with pytest.raises(SystemExit) as caught:
+        ihmdep.main()
+    assert caught.value.code == 141

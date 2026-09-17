@@ -897,7 +897,13 @@ def main():
     args = p.parse_args()
     configure(args)
     try:
-        args.func(args)
+        try:
+            args.func(args)
+        finally:
+            # Flush while a BrokenPipeError can still be caught. Without this
+            # the interpreter flushes at shutdown instead, where the only
+            # possible outcome is "Exception ignored in: <_io.TextIOWrapper>".
+            sys.stdout.flush()
     except NeedLogin as e:
         sys.exit("Not authenticated (%s).\nRun: %s login" % (e, sys.argv[0]))
     except KeyboardInterrupt:
@@ -908,7 +914,7 @@ def main():
         # raise again, then exit the way a program killed by SIGPIPE would.
         try:
             os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
-        except OSError:
+        except (OSError, AttributeError, ValueError):
             pass        # stdout is not a real file descriptor; nothing to do
         sys.exit(128 + 13)
 
