@@ -11,7 +11,7 @@ files -- so the only dependency is `requests`.
     ihmdep.py get_status                  list entries, newest first
     ihmdep.py get_status 9-DXAM           one word + an exit code you can loop on
     ihmdep.py set_status 9-DXAM --to DEPO   move it to another workflow state
-    ihmdep.py download 9-DXAM             fetch generated reports
+    ihmdep.py download 9-DXAM             fetch its generated mmCIF and reports
     ihmdep.py delete 9-DXAM               remove a pre-submit entry
 
 Listings are aligned on a terminal and tab-separated when piped, with a
@@ -72,8 +72,14 @@ MAX_PUT = 100 * 1024 * 1024  # single-request PUT ceiling; larger needs chunking
 
 # Files worth pulling back, and which table they hang off. Generated files join
 # on entry.id ("D_<RID>"); error files join on the RID itself.
-REPORTS = {"full": "Validation: Full PDF", "summary": "Validation: Summary PDF"}
-GENERATED_MMCIF = "mmCIF"
+GENERATED = {
+    "full": "Validation: Full PDF",
+    "summary": "Validation: Summary PDF",
+    "mmcif": "mmCIF",          # the pipeline's own mmCIF, not the one deposited
+}
+# Error files sit in a separate table and are produced even for entries that
+# processed cleanly, so they stay opt-in rather than joining the default set.
+SELECTORS = tuple(GENERATED) + ("logs",)
 
 # Process_Status is free text from a controlled vocabulary; classify by shape
 # rather than enumerating, since the pipeline adds new phases over time.
@@ -723,22 +729,34 @@ def do_delete(args):
         print(rid)
 
 
+def wanted_types(args):
+    """Which generated File_Types to fetch.
+
+    Every selector narrows, and they combine. None of them means everything
+    the pipeline generated -- the mmCIF included, since for most of an entry's
+    life it is the only generated file there is. `--logs` selects nothing here;
+    error files come from their own table.
+    """
+    picked = [k for k in SELECTORS if getattr(args, k)]
+    if not picked:
+        return list(GENERATED.values())
+    return [GENERATED[k] for k in picked if k in GENERATED]
+
+
 def do_download(args):
     rids = collect_rids(args)
     if not rids:
         sys.exit("no RIDs given (pass RIDs, or '-' to read them from stdin)")
     s = session()
 
-    wanted = [REPORTS[k] for k in ("full", "summary") if getattr(args, k)] or list(REPORTS.values())
-    if args.mmcif:
-        wanted.append(GENERATED_MMCIF)
+    wanted = wanted_types(args)
 
     match = "any(%s)" % ",".join(quote(r, safe="") for r in rids)
     # Generated files join on entry.id ("D_<RID>"), error files on the RID.
     ids = {r["RID"]: r["id"] for r in get(s, "/attribute/PDB:entry/RID=%s/RID,id" % match)}
 
     targets = {r: [] for r in rids}
-    if ids:
+    if ids and wanted:
         id_match = "any(%s)" % ",".join(quote(v, safe="") for v in ids.values())
         by_id = {v: k for k, v in ids.items()}
         for r in get(s, "/attribute/PDB:Entry_Generated_File/Structure_Id=%s"
@@ -888,10 +906,12 @@ def main():
     q.add_argument("--rid", action="append", dest="rid_flags", metavar="RID",
                    help="same as a positional RID; may be repeated")
     q.add_argument("-o", "--outdir", default=".")
+    # Default: the generated mmCIF and both reports. Each flag narrows to that
+    # one kind, and they may be combined.
+    q.add_argument("--mmcif", action="store_true", help="the generated mmCIF only")
     q.add_argument("--full", action="store_true", help="full validation report only")
     q.add_argument("--summary", action="store_true", help="summary validation report only")
-    q.add_argument("--mmcif", action="store_true", help="also the generated mmCIF")
-    q.add_argument("--logs", action="store_true", help="also any error/diagnostic files")
+    q.add_argument("--logs", action="store_true", help="error/diagnostic files only")
     q.set_defaults(func=do_download)
 
     args = p.parse_args()

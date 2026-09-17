@@ -63,7 +63,7 @@ ihmdep upload model.cif --image model.png     deposit an entry
 ihmdep run model.cif                          deposit and block
 ihmdep get_status                             list entries, newest first
 ihmdep set_status 9-DXAM --to SUBMIT          DRAFT->DEPO, RECORD READY->SUBMIT
-ihmdep download 9-DXAM                        fetch generated reports
+ihmdep download 9-DXAM                        fetch its generated mmCIF and reports
 ihmdep delete 9-DXAM                          DRAFT or DEPO only
 ```
 
@@ -186,7 +186,15 @@ A failed upload prints no RID, so it drops out of the batch rather than
 stopping it, and re-running the loop picks up the existing RIDs instead of
 depositing twice. `get_status` exits non-zero if any entry errored, which
 keeps a broken batch from being submitted. After SUBMIT the generated mmCIF
-comes first; the validation PDFs arrive later, hence `--mmcif`.
+comes first and the validation PDFs arrive later, so `--mmcif` here asks for
+the part that is ready.
+
+`ihmdep download` with no flag takes everything the pipeline generated: the
+mmCIF and both reports. `--mmcif`, `--full`, `--summary` and `--logs` each
+narrow it to one kind and combine, so `--full --summary` is the two PDFs and
+`--logs` on its own is the diagnostics from a failed run. (`ihmv download`
+spells `--mmcif` differently, because the validation catalog generates no
+mmCIF — there it fetches back the file you submitted.)
 
 Listings are aligned on a terminal and **tab-separated when piped**, with a
 `#`-prefixed header. Several columns contain spaces (`RECORD READY`, `Error:

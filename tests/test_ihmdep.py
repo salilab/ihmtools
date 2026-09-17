@@ -316,3 +316,43 @@ def test_broken_pipe_while_flushing_is_not_a_traceback(monkeypatch, capsys):
     with pytest.raises(SystemExit) as caught:
         ihmdep.main()
     assert caught.value.code == 141
+
+
+# --------------------------------------------------------------------------
+# download: which generated files a set of selectors asks for
+# --------------------------------------------------------------------------
+
+FULL = "Validation: Full PDF"
+SUMMARY = "Validation: Summary PDF"
+MMCIF = "mmCIF"
+
+
+@pytest.mark.parametrize("flags, expected", [
+    # No selector: everything the pipeline generated. The mmCIF used to be
+    # left out here, so an entry that had only its mmCIF -- most of them, for
+    # most of their life -- reported "nothing to download yet".
+    ([], {FULL, SUMMARY, MMCIF}),
+    (["mmcif"], {MMCIF}),           # used to mean "the default set, and also"
+    (["full"], {FULL}),
+    (["summary"], {SUMMARY}),
+    (["full", "summary"], {FULL, SUMMARY}),
+    (["mmcif", "full"], {MMCIF, FULL}),
+    # --logs selects from the error table, so it asks for no generated file,
+    # but it still counts as a selector: it must not fall back to everything.
+    (["logs"], set()),
+    (["mmcif", "logs"], {MMCIF}),
+])
+def test_download_selectors(flags, expected):
+    args = types.SimpleNamespace(**{k: k in flags for k in ihmdep.SELECTORS})
+    assert set(ihmdep.wanted_types(args)) == expected
+
+
+@pytest.mark.parametrize("flag", ihmdep.SELECTORS)
+def test_download_flags_match_the_selectors(monkeypatch, flag):
+    """The parser and the selector table must not drift apart."""
+    argv = ["download", "R", "--" + flag]
+    monkeypatch.setattr(sys, "argv", ["ihmdep"] + argv)
+    args = parse(argv)
+    assert getattr(args, flag) is True
+    assert all(not getattr(args, other)
+               for other in ihmdep.SELECTORS if other != flag)
