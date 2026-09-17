@@ -2,6 +2,12 @@ include README.md
 recursive-include examples *.py *.md
 recursive-include examples/9A9W/data *.cif *.csv *.png
 recursive-include examples/9A8W/data *.cif *.csv *.png
+# MANIFEST globs the working directory, not git, so local scratch has to be
+# pruned here as well as ignored -- untracking it is not enough.
+prune examples/9A8W_test
+prune examples/9A9W_test
+recursive-exclude examples *_test *_test/*
+
 # generated output, and the collection example (11 MB), stay out of the sdist
 exclude examples/9A9W/data/assembled.cif
 exclude examples/9A8W/data/assembled.cif
