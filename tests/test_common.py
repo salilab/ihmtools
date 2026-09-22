@@ -472,3 +472,41 @@ def test_whoami_puts_only_the_identity_on_stdout(monkeypatch, capsys):
     # the identity appears among its own attributes; only real groups listed
     assert "pdb-writer" in captured.err
     assert "someone@example.org" not in captured.err.split("groups")[-1]
+
+
+# --------------------------------------------------------------------------
+# login stays in the terminal
+# --------------------------------------------------------------------------
+
+class RecordingGlobus(FakeGlobus):
+    def __init__(self):
+        super().__init__()
+        self.login_kwargs = None
+
+    def login(self, **kwargs):
+        self.login_kwargs = kwargs
+
+
+@pytest.mark.parametrize("browser, no_browser", [(False, True), (True, False)])
+def test_login_does_not_open_a_browser_unless_asked(monkeypatch, browser, no_browser):
+    """deriva-py opens one by default. Whichever browser it picks may be signed
+    in as a different account, which is how the wrong identity gets stored."""
+    fake = RecordingGlobus()
+    monkeypatch.setattr(common, "_globus", lambda: fake)
+    monkeypatch.setattr(common, "connect", lambda: (FakeClient(), None))
+    aim_at()
+
+    common.do_login(types.SimpleNamespace(browser=browser))
+    assert fake.login_kwargs["no_browser"] is no_browser
+
+
+def test_login_never_starts_a_local_server(monkeypatch):
+    """A redirect to localhost cannot work over ssh or from a container."""
+    fake = RecordingGlobus()
+    monkeypatch.setattr(common, "_globus", lambda: fake)
+    monkeypatch.setattr(common, "connect", lambda: (FakeClient(), None))
+    aim_at()
+
+    common.do_login(types.SimpleNamespace(browser=False))
+    assert fake.login_kwargs["no_local_server"] is True
+    assert fake.login_kwargs["refresh_tokens"] is True

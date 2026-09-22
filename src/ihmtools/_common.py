@@ -81,10 +81,14 @@ def _globus():
 def do_login(args):
     """Run Globus's native-app flow and let deriva-py store the tokens.
 
-    no_local_server keeps this usable over ssh: Globus shows a code to paste
-    back rather than redirecting to a port on this machine.
+    Terminal-only by default: no_local_server means Globus shows a code to
+    paste back rather than redirecting to a port on this machine, and
+    no_browser means the URL is printed rather than handed to a browser. Both
+    matter over ssh, in a container, and on any machine where the account that
+    opens the browser is not the one you meant to log in as -- which is how
+    the wrong identity gets stored in the first place.
     """
-    _globus().login(hosts=[HOST], no_local_server=True, no_browser=args.no_browser,
+    _globus().login(hosts=[HOST], no_local_server=True, no_browser=not args.browser,
                     refresh_tokens=True)
     catalog, _ = connect()
     print("Logged in as %s" % whoami(catalog))
@@ -530,7 +534,11 @@ def build_parser(doc, modes, default_mode):
 def add_auth_commands(add, login_fn=do_login, logout_fn=do_logout):
     """login and logout are identical in both tools."""
     q = add("login", help="authenticate with Globus")
-    q.add_argument("--no-browser", action="store_true", help="just print the URL")
+    q.add_argument("--browser", action="store_true",
+                   help="open the login URL in a browser; by default it is printed "
+                        "and you paste the code back")
+    # Accepted and ignored: printing the URL is now what happens anyway.
+    q.add_argument("--no-browser", action="store_true", help=argparse.SUPPRESS)
     q.set_defaults(func=login_fn)
 
     q = add("logout", help="revoke the stored credentials and forget them")

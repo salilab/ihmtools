@@ -6,9 +6,16 @@ deposition systems. Built on [deriva-py][]: `ErmrestCatalog` for records,
 
 ```bash
 pip install ihmtools
-ihmv login          # once; Globus, via the browser
+ihmv login          # once; prints a Globus URL, you paste the code back
+ihmv whoami         # which account that was
 ihmv logout         # revokes at Globus, then forgets the token
 ```
+
+`login` stays in the terminal: it prints the URL rather than opening a browser
+and never starts a local redirect server, so it works the same over ssh, in a
+container, and on a desktop. That is also the safer default — the browser
+already signed in to some Globus account is a good way to store credentials
+for an account you did not mean. Pass `--browser` if you want it opened.
 
 Credentials live in deriva-py's own store, `~/.deriva/globus-credential.json`,
 so one login covers `ihmv`, `ihmdep` and the rest of the DERIVA client tools —
@@ -301,7 +308,7 @@ pip install -e '.[test]'
 pytest
 ```
 
-134 tests, offline — no network, no credentials, nothing written.
+137 tests, offline — no network, no credentials, nothing written.
 
 Two further tests drive a full round trip against the **dev** servers and are
 deselected unless asked for:
