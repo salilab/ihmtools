@@ -175,7 +175,7 @@ RID=$(ihmv upload model.cif)
 ihmv get_status --wait "$RID" && ihmv download "$RID" -o reports/
 ```
 
-`--wait` is a flag; `--interval SECS` changes the 30-second poll. They are
+`--wait` is a flag; `--interval SECS` changes the 60-second poll. They are
 separate because a RID can be all digits, and an option that took an optional
 value would read `--wait 300` as an interval rather than as RID 300.
 

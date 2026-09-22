@@ -178,7 +178,7 @@ def test_wait_never_swallows_a_rid(monkeypatch, argv, rids):
 
 def test_wait_defaults_and_overrides(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["ihmdep", "get_status", "--wait", "300"])
-    assert parse(None).interval == 30
+    assert parse(None).interval == common.POLL_INTERVAL
     monkeypatch.setattr(sys, "argv",
                         ["ihmdep", "get_status", "--wait", "--interval", "5", "300"])
     assert parse(None).interval == 5

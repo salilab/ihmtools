@@ -31,6 +31,10 @@ GROUP_SIGNUP = "https://app.globus.org/groups/99da042e-64a6-11ea-ad5f-0ef992ed7c
 # Past this, hand the upload to Hatrac's chunked job API instead of one PUT.
 CHUNK_THRESHOLD = 100 * 1024 * 1024
 
+# Seconds between polls when waiting. The backend takes minutes on a real
+# entry, so a tighter loop only adds requests that answer "still running".
+POLL_INTERVAL = 60
+
 # Where these tools kept tokens before deriva-py did it for us.
 LEGACY_TOKENS = os.path.expanduser("~/.config/ihmv/tokens.json")
 
@@ -503,14 +507,14 @@ def add_rids(q, what="one or more RIDs, or '-' to read them from stdin"):
     return q
 
 
-def add_interval(q, default=30):
+def add_interval(q, default=POLL_INTERVAL):
     """Poll spacing, shared by the waiting commands."""
     q.add_argument("--interval", type=int, default=default, metavar="SECS",
                    help="seconds between polls (default %(default)s)")
     return q
 
 
-def add_wait(q, default_interval=30):
+def add_wait(q, default_interval=POLL_INTERVAL):
     """--wait is a flag and --interval takes the value; they must stay apart.
 
     A RID can be all digits, so a --wait that took an optional value would read
