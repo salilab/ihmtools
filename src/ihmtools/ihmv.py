@@ -30,8 +30,9 @@ import uuid
 from deriva.core import urlquote
 
 from . import _common as common
-from ._common import (add_rids, add_wait, any_of, check, collect_rids,
-                      confirm, connect, details_block, emit_table, get, mine,
+from ._common import (add_rids, add_wait, check, collect_rids,
+                      confirm, connect, details_block, emit_table, get,
+                      get_batched, mine,
                       prepare_asset, put_asset, require_rids, whoami)
 
 MODES = {
@@ -104,10 +105,9 @@ def do_upload(args):
 def poll_status(rids, verbose):
     """Fetch each RID's state once. Returns [(rid, row-or-None)] in request order."""
     catalog, _ = connect()   # rebuilt each poll so a long --wait refreshes its token
-    match = any_of(rids)
     cols = (LIST_COLS + ",Processing_Details") if verbose else "RID,Processing_Status"
     found = {r["RID"]: r for r in
-             get(catalog, "/attribute/IHMV:Structure_mmCIF/RID=%s/%s" % (match, cols))}
+             get_batched(catalog, "/attribute/IHMV:Structure_mmCIF/RID=", rids, "/" + cols)}
     return [(rid, found.get(rid)) for rid in rids]
 
 
@@ -248,10 +248,9 @@ def do_delete(args):
     rids = require_rids(args)
 
     catalog, store = connect()
-    match = any_of(rids)
-    found = {r["RID"]: r for r in get(
-        catalog, "/attribute/IHMV:Structure_mmCIF/RID=%s"
-                 "/RID,Title,Processing_Status,File_MD5,File_URL" % match)}
+    found = {r["RID"]: r for r in get_batched(
+        catalog, "/attribute/IHMV:Structure_mmCIF/RID=", rids,
+        "/RID,Title,Processing_Status,File_MD5,File_URL")}
     if len(found) != len(rids):
         for rid in rids:
             if rid not in found:
@@ -261,8 +260,8 @@ def do_delete(args):
     # Generated_File points at the structure by text with no FK, so nothing
     # cascades -- deleting the structure alone would strand its reports.
     reports = {}
-    for r in get(catalog, "/attribute/IHMV:Generated_File/Structure_mmCIF=%s"
-                          "/Structure_mmCIF" % match):
+    for r in get_batched(catalog, "/attribute/IHMV:Generated_File/Structure_mmCIF=",
+                         rids, "/Structure_mmCIF"):
         reports[r["Structure_mmCIF"]] = reports.get(r["Structure_mmCIF"], 0) + 1
 
     for rid in rids:
@@ -308,17 +307,16 @@ def do_download(args):
     catalog, store = connect()
     wanted = [REPORTS[k] for k in ("full", "summary") if getattr(args, k)] or list(REPORTS.values())
     # ERMrest takes a disjunction, so the whole batch is one round trip.
-    match = any_of(rids)
-
     targets = {r: [] for r in rids}
     if args.mmcif:
-        for r in get(catalog, "/attribute/IHMV:Structure_mmCIF/RID=%s/RID,File_Name,File_URL" % match):
+        for r in get_batched(catalog, "/attribute/IHMV:Structure_mmCIF/RID=", rids,
+                             "/RID,File_Name,File_URL"):
             # Report names already carry the RID; submitted files don't, so
             # prefix them when a batch could otherwise collide.
             name = r["File_Name"] if len(rids) == 1 else "%s_%s" % (r["RID"], r["File_Name"])
             targets[r["RID"]].append((name, r["File_URL"]))
-    for r in get(catalog, "/attribute/IHMV:Generated_File/Structure_mmCIF=%s"
-                          "/Structure_mmCIF,File_Type,File_Name,File_URL" % match):
+    for r in get_batched(catalog, "/attribute/IHMV:Generated_File/Structure_mmCIF=",
+                         rids, "/Structure_mmCIF,File_Type,File_Name,File_URL"):
         if r["File_Type"] in wanted:
             targets[r["Structure_mmCIF"]].append((r["File_Name"], r["File_URL"]))
 

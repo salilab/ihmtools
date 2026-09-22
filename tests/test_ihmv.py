@@ -173,7 +173,7 @@ def test_delete_skips_the_report_sweep_when_there_are_none(monkeypatch):
     deleted = []
     catalog = types.SimpleNamespace(delete=lambda path, **kw: deleted.append(path))
     monkeypatch.setattr(ihmv, "connect", lambda: (catalog, None))
-    monkeypatch.setattr(ihmv, "get", lambda _c, path: (
+    monkeypatch.setattr(common, "get", lambda _c, path: (
         [] if "Generated_File" in path
         else [{"RID": "R", "Title": "t", "Processing_Status": "In Progress",
                "File_MD5": "m", "File_URL": "/hatrac/x"}]))
@@ -188,7 +188,7 @@ def test_delete_sweeps_reports_when_there_are_some(monkeypatch):
     deleted = []
     catalog = types.SimpleNamespace(delete=lambda path, **kw: deleted.append(path))
     monkeypatch.setattr(ihmv, "connect", lambda: (catalog, None))
-    monkeypatch.setattr(ihmv, "get", lambda _c, path: (
+    monkeypatch.setattr(common, "get", lambda _c, path: (
         [{"Structure_mmCIF": "R"}] if "Generated_File" in path
         else [{"RID": "R", "Title": "t", "Processing_Status": "Success",
                "File_MD5": "m", "File_URL": "/hatrac/x"}]))

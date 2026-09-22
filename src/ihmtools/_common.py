@@ -31,6 +31,10 @@ GROUP_SIGNUP = "https://app.globus.org/groups/99da042e-64a6-11ea-ad5f-0ef992ed7c
 # Past this, hand the upload to Hatrac's chunked job API instead of one PUT.
 CHUNK_THRESHOLD = 100 * 1024 * 1024
 
+# RIDs per request when a command takes a list of them. A URL runs about
+# nine bytes per RID and is refused somewhere past 4 KB, so keep well under.
+BATCH = 100
+
 # Seconds between polls when waiting. The backend takes minutes on a real
 # entry, so a tighter loop only adds requests that answer "still running".
 POLL_INTERVAL = 60
@@ -252,8 +256,22 @@ def mine(catalog):
 
 
 def any_of(values):
-    """An ERMrest disjunction, so a whole batch is one round trip."""
+    """An ERMrest disjunction, so a batch is one round trip."""
     return "any(%s)" % ",".join(urlquote(v) for v in values)
+
+
+def get_batched(catalog, before, values, after="", batch=BATCH):
+    """`before + any(values) + after`, in chunks, results concatenated.
+
+    ERMrest is happy with a long disjunction but something in front of it is
+    not: the URL runs about nine bytes per RID, and past roughly 4 KB the
+    request comes back 404 -- indistinguishable from "no such entries" -- and
+    past 8 KB, 414. Chunking keeps every URL well inside that.
+    """
+    rows = []
+    for i in range(0, len(values), batch):
+        rows.extend(get(catalog, before + any_of(values[i:i + batch]) + after))
+    return rows
 
 
 # --------------------------------------------------------------------------

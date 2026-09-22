@@ -30,8 +30,9 @@ import time
 from deriva.core import urlquote
 
 from . import _common as common
-from ._common import (add_rids, add_wait, any_of, check, collect_rids,
-                      confirm, connect, details_block, emit_table, get, mine,
+from ._common import (add_rids, add_wait, check, collect_rids,
+                      confirm, connect, details_block, emit_table, get,
+                      get_batched, mine,
                       prepare_asset, put_asset, require_rids, whoami)
 
 MODES = {
@@ -175,10 +176,10 @@ def is_error(state):
 def poll_status(rids, verbose):
     """Fetch each RID's state once. Returns [(rid, row-or-None)] in request order."""
     catalog, _ = connect()   # rebuilt each poll so a long --wait refreshes its token
-    match = any_of(rids)
     cols = (LIST_COLS + ",Record_Status_Detail") if verbose else \
            "RID,Workflow_Status,Process_Status"
-    found = {r["RID"]: r for r in get(catalog, "/attribute/PDB:entry/RID=%s/%s" % (match, cols))}
+    found = {r["RID"]: r for r in
+             get_batched(catalog, "/attribute/PDB:entry/RID=", rids, "/" + cols)}
     return [(rid, found.get(rid)) for rid in rids]
 
 
@@ -337,11 +338,9 @@ def do_delete(args):
     rids = require_rids(args)
 
     catalog, _ = connect()
-    match = any_of(rids)
-    found = {r["RID"]: r for r in get(
-        catalog, "/attribute/PDB:entry/RID=%s"
-                 "/RID,id,Workflow_Status,Process_Status,Accession_Code,mmCIF_File_Name"
-                 % match)}
+    found = {r["RID"]: r for r in get_batched(
+        catalog, "/attribute/PDB:entry/RID=", rids,
+        "/RID,id,Workflow_Status,Process_Status,Accession_Code,mmCIF_File_Name")}
     if len(found) != len(rids):
         for rid in rids:
             if rid not in found:
@@ -393,21 +392,21 @@ def do_download(args):
 
     wanted = wanted_types(args)
 
-    match = any_of(rids)
     # Generated files join on entry.id ("D_<RID>"), error files on the RID.
-    ids = {r["RID"]: r["id"] for r in get(catalog, "/attribute/PDB:entry/RID=%s/RID,id" % match)}
+    ids = {r["RID"]: r["id"] for r in
+           get_batched(catalog, "/attribute/PDB:entry/RID=", rids, "/RID,id")}
 
     targets = {r: [] for r in rids}
     if ids and wanted:
-        id_match = any_of(ids.values())
         by_id = {v: k for k, v in ids.items()}
-        for r in get(catalog, "/attribute/PDB:Entry_Generated_File/Structure_Id=%s"
-                              "/Structure_Id,File_Type,File_Name,File_URL" % id_match):
+        for r in get_batched(catalog, "/attribute/PDB:Entry_Generated_File/Structure_Id=",
+                             list(ids.values()),
+                             "/Structure_Id,File_Type,File_Name,File_URL"):
             if r["File_Type"] in wanted:
                 targets[by_id[r["Structure_Id"]]].append((r["File_Name"], r["File_URL"]))
     if args.logs:
-        for r in get(catalog, "/attribute/PDB:Entry_Error_File/Entry_RID=%s"
-                              "/Entry_RID,File_Name,File_URL" % match):
+        for r in get_batched(catalog, "/attribute/PDB:Entry_Error_File/Entry_RID=",
+                             rids, "/Entry_RID,File_Name,File_URL"):
             targets[r["Entry_RID"]].append((r["File_Name"], r["File_URL"]))
 
     os.makedirs(args.outdir, exist_ok=True)

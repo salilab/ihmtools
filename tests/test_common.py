@@ -524,3 +524,49 @@ def test_login_never_starts_a_local_server(monkeypatch):
     common.do_login(types.SimpleNamespace(browser=False))
     assert fake.login_kwargs["no_local_server"] is True
     assert fake.login_kwargs["refresh_tokens"] is True
+
+
+# --------------------------------------------------------------------------
+# batching -- a disjunction is one request, but the URL has a ceiling
+# --------------------------------------------------------------------------
+
+def batched_urls(monkeypatch, n, batch=common.BATCH):
+    urls = []
+    monkeypatch.setattr(common, "get", lambda _c, path: urls.append(path) or [{"n": path}])
+    rows = common.get_batched(None, "/attribute/T/RID=", ["R%d" % i for i in range(n)],
+                              "/RID", batch=batch)
+    return urls, rows
+
+
+def test_one_request_when_it_fits(monkeypatch):
+    urls, rows = batched_urls(monkeypatch, 25)
+    assert len(urls) == 1
+    assert urls[0].startswith("/attribute/T/RID=any(R0,R1,")
+    assert urls[0].endswith(")/RID")
+    assert len(rows) == 1
+
+
+def test_splits_past_the_batch_size(monkeypatch):
+    """A 500-RID disjunction comes back 404 -- which reads as 'no such
+    entries' rather than 'too long', so it must never be sent."""
+    urls, rows = batched_urls(monkeypatch, 250)
+    assert len(urls) == 3, "250 RIDs at 100 per request"
+    assert len(rows) == 3, "every chunk's rows are kept"
+    assert "any(R0," in urls[0] and "any(R100," in urls[1] and "any(R200," in urls[2]
+
+
+def test_every_rid_appears_exactly_once(monkeypatch):
+    urls, _ = batched_urls(monkeypatch, 250)
+    seen = [r for u in urls for r in u.split("any(")[1].rstrip(")/RID").split(",")]
+    assert seen == ["R%d" % i for i in range(250)]
+
+
+def test_no_request_for_an_empty_list(monkeypatch):
+    urls, rows = batched_urls(monkeypatch, 0)
+    assert urls == [] and rows == []
+
+
+def test_batch_size_stays_under_the_url_ceiling():
+    """Measured: ~9 bytes per RID, 404 at ~4 KB, 414 at ~9 KB."""
+    longest = common.any_of(["9-ABCDEFG"] * common.BATCH)
+    assert len(longest) < 2000, "a full batch must leave room for host and columns"
