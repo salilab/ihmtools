@@ -21,7 +21,8 @@ MODES = {"dev": ("dev.example", "1"), "production": ("prod.example", "2")}
 
 def aim_at(mode="dev", **kw):
     """configure() is parameterised by the front end; give it a stand-in."""
-    common.configure(types.SimpleNamespace(mode=mode, **kw), MODES, "dev", "TEST")
+    common.configure(types.SimpleNamespace(mode=mode, **kw), MODES, "TEST",
+                     default_mode="dev")
 
 
 # --------------------------------------------------------------------------
@@ -570,3 +571,29 @@ def test_batch_size_stays_under_the_url_ceiling():
     """Measured: ~9 bytes per RID, 404 at ~4 KB, 414 at ~9 KB."""
     longest = common.any_of(["9-ABCDEFG"] * common.BATCH)
     assert len(longest) < 2000, "a full batch must leave room for host and columns"
+
+
+def test_both_front_ends_share_one_default_mode():
+    """They drifted once -- ihmv sat on dev for a week after ihmdep moved --
+    because each declared its own. Neither may declare one again."""
+    import importlib
+    for name in ("ihmv", "ihmdep"):
+        mod = importlib.import_module("ihmtools." + name)
+        assert not hasattr(mod, "DEFAULT_MODE"), \
+            "%s re-declares DEFAULT_MODE; it belongs to _common" % name
+        assert common.DEFAULT_MODE in mod.MODES, \
+            "%s has no %s mode" % (name, common.DEFAULT_MODE)
+
+
+@pytest.mark.parametrize("name, host, catalog", [
+    ("ihmv", "data.pdb-ihm.org", "101"),
+    ("ihmdep", "data.pdb-ihm.org", "1"),
+])
+def test_a_bare_invocation_targets_production(monkeypatch, name, host, catalog):
+    import importlib
+    mod = importlib.import_module("ihmtools." + name)
+    monkeypatch.delenv("%s_HOST" % name.upper(), raising=False)
+    monkeypatch.delenv("%s_CATALOG" % name.upper(), raising=False)
+
+    mod.configure(types.SimpleNamespace())
+    assert (common.HOST, common.CATALOG_ID) == (host, catalog)

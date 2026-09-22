@@ -39,7 +39,6 @@ MODES = {
     "dev": ("data-dev.pdb-ihm.org", "199"),
     "production": ("data.pdb-ihm.org", "101"),
 }
-DEFAULT_MODE = "production"
 
 # Where submitted files go and which extensions are allowed both come from this
 # annotation, which is what the web UI follows. The bulk-upload annotation that
@@ -343,11 +342,11 @@ def do_download(args):
 # --------------------------------------------------------------------------
 
 def configure(args):
-    return common.configure(args, MODES, DEFAULT_MODE, "IHMV")
+    return common.configure(args, MODES, "IHMV")
 
 
 def main():
-    p, add = common.build_parser(__doc__, MODES, DEFAULT_MODE)
+    p, add = common.build_parser(__doc__, MODES)
 
     def submit_args(q):
         q.add_argument("file", help="mmCIF file")

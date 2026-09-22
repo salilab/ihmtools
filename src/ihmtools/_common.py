@@ -31,6 +31,11 @@ GROUP_SIGNUP = "https://app.globus.org/groups/99da042e-64a6-11ea-ad5f-0ef992ed7c
 # Past this, hand the upload to Hatrac's chunked job API instead of one PUT.
 CHUNK_THRESHOLD = 100 * 1024 * 1024
 
+# Which deployment a bare invocation talks to. Shared, so the two front ends
+# cannot drift apart again -- they did, and ihmv quietly stayed on dev for a
+# week after ihmdep moved. MODES stays per-tool: the catalog ids differ.
+DEFAULT_MODE = "production"
+
 # RIDs per request when a command takes a list of them. A URL runs about
 # nine bytes per RID and is refused somewhere past 4 KB, so keep well under.
 BATCH = 100
@@ -59,7 +64,7 @@ class NeedLogin(Exception):
 # target resolution
 # --------------------------------------------------------------------------
 
-def configure(args, modes, default_mode, env_prefix):
+def configure(args, modes, env_prefix, default_mode=DEFAULT_MODE):
     """Resolve the target server: flags > --mode > environment > default."""
     global SCHEME, HOST, CATALOG_ID, URL
     host, catalog = modes[default_mode]
@@ -543,7 +548,7 @@ def add_wait(q, default_interval=POLL_INTERVAL):
     return add_interval(q, default_interval)
 
 
-def build_parser(doc, modes, default_mode):
+def build_parser(doc, modes, default_mode=DEFAULT_MODE):
     """The shared parser skeleton. Returns (parser, add_subcommand)."""
     other = [m for m in modes if m != default_mode][0]
     # SUPPRESS so an unset option leaves no attribute behind; that lets these be

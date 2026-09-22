@@ -39,7 +39,6 @@ MODES = {
     "dev": ("data-dev.pdb-ihm.org", "99"),
     "production": ("data.pdb-ihm.org", "1"),
 }
-DEFAULT_MODE = "production"
 
 
 def asset_path(column):
@@ -437,11 +436,11 @@ def do_download(args):
 # --------------------------------------------------------------------------
 
 def configure(args):
-    return common.configure(args, MODES, DEFAULT_MODE, "IHMDEP")
+    return common.configure(args, MODES, "IHMDEP")
 
 
 def main():
-    p, add = common.build_parser(__doc__, MODES, DEFAULT_MODE)
+    p, add = common.build_parser(__doc__, MODES)
 
     def deposit_args(q):
         q.add_argument("file", nargs="?", help="mmCIF file to deposit")
