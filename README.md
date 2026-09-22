@@ -286,7 +286,7 @@ pip install -e '.[test]'
 pytest
 ```
 
-111 tests, offline — no network, no credentials, nothing written.
+128 tests, offline — no network, no credentials, nothing written.
 
 Two further tests drive a full round trip against the **dev** servers and are
 deselected unless asked for:
@@ -296,10 +296,13 @@ pytest -m live          # ihmdep: upload + image -> wait -> RECORD READY -> SUBM
                         # ihmv:   upload -> wait -> download both reports
 ```
 
-These need a login. Each run stamps this run's own copy of
-`examples/G_1000003/9A7U.cif` and `9A7U.png` with the current time — in the
-filename, in `_struct.pdbx_model_details`, and in a PNG `tEXt` chunk. Both
-tools dedupe on md5 and Hatrac is content-addressed, so unstamped files would
-match the previous run instead of exercising the upload path. The IHMV entry is deleted on the
-way out (set `IHMTOOLS_LIVE_KEEP` to keep it); the deposition entry is not,
-since the round trip ends in SUBMIT and past `DEPO` the CLI will not delete.
+These need a login. Each run salts its own copy of
+`examples/G_1000003/9A7U.cif` and `9A7U.png` through the same
+`--salt` machinery described above, because both tools dedupe on md5 and
+Hatrac is content-addressed: unsalted files would match the previous run
+instead of exercising the upload path.
+
+Nothing is cleaned up: each run leaves one record per tool on dev, and prints
+both RIDs. A test that deleted its own entries would destroy the evidence you
+want when it fails, and the deposition one could not be removed anyway, since
+the round trip ends in SUBMIT.

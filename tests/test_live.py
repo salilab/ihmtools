@@ -14,10 +14,10 @@ Each run works on its own stamped copies of examples/G_1000003/9A7U.{cif,png},
 since both tools dedupe on md5 and Hatrac is content-addressed -- reusing a
 file would match the previous run rather than exercise the upload.
 
-What they leave behind. The IHMV entry is deleted on the way out unless
-IHMTOOLS_LIVE_KEEP is set. The deposition entry is not: the round trip ends in
-SUBMIT, and past DEPO the CLI deliberately refuses to delete, so each run
-leaves one record on dev. Both RIDs are printed.
+Nothing is cleaned up. Each run leaves one record per tool on dev, and both
+RIDs are printed. Deleting would mean a test that destroys the very evidence
+you would want when it fails -- and the deposition entry could not be removed
+anyway, since the round trip ends in SUBMIT and the CLI refuses past DEPO.
 """
 
 import os
@@ -45,7 +45,6 @@ TEMPLATE_IMAGE = os.path.join(EXAMPLES, "9A7U.png")
 # The backend takes minutes on a real entry; a hung pipeline must not hang CI.
 WAIT_TIMEOUT = int(os.environ.get("IHMTOOLS_LIVE_TIMEOUT", "1800"))
 POLL = os.environ.get("IHMTOOLS_LIVE_INTERVAL", "30")
-KEEP = bool(os.environ.get("IHMTOOLS_LIVE_KEEP"))
 
 # The states an entry passes through before it is submitted.
 PRE_SUBMIT = ("DRAFT", "DEPO", "RECORD READY")
@@ -165,22 +164,15 @@ def test_ihmv_submit_to_reports(unique_cif, tmp_path):
     """upload -> wait -> fetch both validation reports."""
     rid = run("ihmv", "upload", unique_cif).stdout.strip()
     assert rid, "upload printed no RID"
-    print("ihmv submitted %s" % rid)
+    print("ihmv submitted %s (left on dev)" % rid)
 
-    try:
-        run("ihmv", "get_status", "--wait", "--interval", POLL, rid,
-            timeout=WAIT_TIMEOUT, expect=0)
-        assert run("ihmv", "get_status", rid).stdout.strip() == "Success"
+    run("ihmv", "get_status", "--wait", "--interval", POLL, rid,
+        timeout=WAIT_TIMEOUT, expect=0)
+    assert run("ihmv", "get_status", rid).stdout.strip() == "Success"
 
-        out = tmp_path / "reports"
-        run("ihmv", "download", rid, "-o", out)
-        got = sorted(p.name for p in out.glob("*.pdf"))
-        assert len(got) == 2, "expected the full and summary reports, got %s" % got
-        for pdf in out.glob("*.pdf"):
-            assert pdf.read_bytes()[:4] == b"%PDF", "%s is not a PDF" % pdf.name
-    finally:
-        # IHMV records are deletable, so this one need not outlive the test.
-        if not KEEP:
-            # Record only: purging the Hatrac object needs permissions a
-            # depositor does not have, and it is content-addressed anyway.
-            run("ihmv", "delete", rid, "--yes", expect=None)
+    out = tmp_path / "reports"
+    run("ihmv", "download", rid, "-o", out)
+    got = sorted(p.name for p in out.glob("*.pdf"))
+    assert len(got) == 2, "expected the full and summary reports, got %s" % got
+    for pdf in out.glob("*.pdf"):
+        assert pdf.read_bytes()[:4] == b"%PDF", "%s is not a PDF" % pdf.name
