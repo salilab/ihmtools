@@ -11,7 +11,8 @@ requires-python = ">=3.9"
 license = "MIT"
 authors = [{ name = "Arthur Zalevsky", email = "aozalevsky@gmail.com" }]
 keywords = ["pdb-ihm", "deriva", "ermrest", "hatrac", "integrative modeling"]
-dependencies = ["requests"]
+# deriva-py brings requests, globus-sdk and the Hatrac/ERMrest clients.
+dependencies = ["deriva>=1.7"]
 
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -38,3 +39,9 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Integration tests deposit on a live server and need credentials, so they are
+# deselected unless asked for by name or with -m live.
+addopts = "-m 'not live'"
+markers = [
+    "live: round-trips against a real catalog; needs a login and writes records",
+]

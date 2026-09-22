@@ -1,8 +1,8 @@
 # ihmtools
 
 Command-line tools for the [PDB-IHM](https://pdb-ihm.org) validation and
-deposition systems. They talk to DERIVA's two REST APIs directly — ERMrest for
-records, Hatrac for files — so the only dependency is `requests`.
+deposition systems. Built on [deriva-py][]: `ErmrestCatalog` for records,
+`HatracStore` for files, `GlobusNativeLogin` for authentication.
 
 ```bash
 pip install ihmtools
@@ -10,8 +10,12 @@ ihmv login          # once; Globus, via the browser
 ihmv logout         # revokes at Globus, then forgets the token
 ```
 
-Both commands share one credential store, so logging in or out of either
-affects both.
+Credentials live in deriva-py's own store, `~/.deriva/globus-credential.json`,
+so one login covers `ihmv`, `ihmdep` and the rest of the DERIVA client tools —
+and logging out of any of them logs out of all of them. Tokens written by an
+earlier `ihmtools` under `~/.config/ihmv/` are imported once, automatically.
+
+[deriva-py]: https://github.com/informatics-isi-edu/deriva-py
 
 While only the TestPyPI pre-release exists, the second index is not optional:
 
@@ -31,14 +35,6 @@ switches either.
 and `RECORD READY -> SUBMIT` — and deletes only `DRAFT` or `DEPO` entries.
 Anything further along is deleted from the web interface, which has the
 context to do it safely; these tools deliberately do not.
-
-The examples below live in the repository, so clone it to run them:
-
-```bash
-git clone https://github.com/salilab/ihmtools.git
-cd ihmtools
-pip install -e .
-```
 
 ## `ihmv` — validation catalog
 
@@ -238,14 +234,28 @@ before reporting it.
 
 ## Notes
 
-The two modules are deliberately self-contained — each can be copied out and
-run on its own — which means they duplicate their auth and HTTP layers. A fix
-to one must be applied to both.
+`ihmtools/_common.py` holds everything the two front ends share: the deriva-py
+layer (`connect`, `check`, `get`, login/logout, Hatrac upload) and the CLI
+conventions (`emit_table`, `collect_rids`, the `--mode` flags, the exit and
+broken-pipe handling). `ihmv.py` and `ihmdep.py` are left with what actually
+differs — their tables, their columns, and their workflow rules.
+
+Those two modules used to be deliberately self-contained, each copyable and
+runnable on nothing but `requests`. Moving to deriva-py ended that, so the
+duplication it bought was no longer paying for anything.
 
 Uploads follow the catalog's own `tag:isrd.isi.edu,2017:asset` annotation for
 where files go and which extensions are accepted, which is what the web UI
-obeys. Don't substitute the `bulk-upload` annotation that `deriva-upload-cli`
-reads: on dev it points at a different Hatrac namespace.
+obeys. Resolving its handlebars `url_pattern` is the one piece deriva-py does
+not provide — it names `tag.asset` but has no handlebars engine, and only ever
+*writes* a `url_pattern`, never reads one.
+
+That is also why these tools do not use deriva-py's `DerivaUpload`, which is
+driven by the **`bulk-upload`** annotation instead. The two disagree: on dev
+`bulk-upload` omits the `dev/` path element the asset annotation carries, and
+on production the deployed `bulk-upload` config is older still
+(`entry/mmcif/{file_name}` rather than `entry/mmCIF/{md5}.{ext}`). Following
+the asset annotation puts our files exactly where the web UI puts them.
 
 ## Tests
 
@@ -256,4 +266,20 @@ pip install -e '.[test]'
 pytest
 ```
 
-Offline only — no network or credentials needed.
+111 tests, offline — no network, no credentials, nothing written.
+
+Two further tests drive a full round trip against the **dev** servers and are
+deselected unless asked for:
+
+```bash
+pytest -m live          # ihmdep: upload + image -> wait -> RECORD READY -> SUBMIT -> download
+                        # ihmv:   upload -> wait -> download both reports
+```
+
+These need a login. Each run stamps this run's own copy of
+`examples/G_1000003/9A7U.cif` and `9A7U.png` with the current time — in the
+filename, in `_struct.pdbx_model_details`, and in a PNG `tEXt` chunk. Both
+tools dedupe on md5 and Hatrac is content-addressed, so unstamped files would
+match the previous run instead of exercising the upload path. The IHMV entry is deleted on the
+way out (set `IHMTOOLS_LIVE_KEEP` to keep it); the deposition entry is not,
+since the round trip ends in SUBMIT and past `DEPO` the CLI will not delete.

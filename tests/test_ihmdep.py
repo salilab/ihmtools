@@ -1,11 +1,11 @@
 """Offline tests for the deposition CLI. No network, no credentials."""
 
-import io
 import sys
 import types
 
 import pytest
 
+from ihmtools import _common as common
 from ihmtools import ihmdep
 
 
@@ -122,44 +122,19 @@ def test_image_extension_restriction_is_ours():
 
 @pytest.mark.parametrize("kwargs, expected", [
     # production is the default for the deposition system
-    ({}, "https://data.pdb-ihm.org/ermrest/catalog/1"),
-    ({"mode": "production"}, "https://data.pdb-ihm.org/ermrest/catalog/1"),
-    ({"mode": "dev"}, "https://data-dev.pdb-ihm.org/ermrest/catalog/99"),
-    ({"host": "example.org"}, "https://example.org/ermrest/catalog/1"),
+    ({}, ("https", "data.pdb-ihm.org", "1")),
+    ({"mode": "production"}, ("https", "data.pdb-ihm.org", "1")),
+    ({"mode": "dev"}, ("https", "data-dev.pdb-ihm.org", "99")),
+    ({"host": "example.org"}, ("https", "example.org", "1")),
+    # deriva-py needs scheme and host apart, but --host still takes a whole URL
+    ({"host": "http://plain.example"}, ("http", "plain.example", "1")),
+    ({"host": "https://data-dev.pdb-ihm.org/"}, ("https", "data-dev.pdb-ihm.org", "1")),
 ])
 def test_configure(monkeypatch, kwargs, expected):
     monkeypatch.delenv("IHMDEP_HOST", raising=False)
     monkeypatch.delenv("IHMDEP_CATALOG", raising=False)
     ihmdep.configure(types.SimpleNamespace(**kwargs))
-    assert ihmdep.CAT == expected
-
-
-def _asset(md5_column, prefix):
-    return {
-        "md5": md5_column,
-        "url_pattern": (
-            prefix + '/uid/{{#if _RCB}}{{#regexFindFirst _RCB "[^/]+$"}}{{this}}'
-            '{{/regexFindFirst}}{{else}}{{#regexFindFirst $session.client.id "[^/]+$"}}'
-            '{{this}}{{/regexFindFirst}}{{/if}}/entry/x/{{{%s}}}{{{_%s.filename_ext}}}'
-            % (md5_column, md5_column.replace("_MD5", "_URL"))
-        ),
-    }
-
-
-def test_hatrac_target_handles_both_asset_columns():
-    """mmCIF and image columns name their own md5 field."""
-    mmcif = ihmdep.hatrac_target(_asset("mmCIF_File_MD5", "/hatrac/pdb/submitted"),
-                                 "UID", "MD5", ".cif")
-    image = ihmdep.hatrac_target(_asset("Image_File_MD5", "/hatrac/pdb/submitted"),
-                                 "UID", "MD5", ".png")
-    assert mmcif == "/hatrac/pdb/submitted/uid/UID/entry/x/MD5.cif"
-    assert image == "/hatrac/pdb/submitted/uid/UID/entry/x/MD5.png"
-
-
-def test_hatrac_target_refuses_unknown_field():
-    bad = {"md5": "mmCIF_File_MD5", "url_pattern": "/hatrac/x/{{{Unexpected}}}"}
-    with pytest.raises(SystemExit):
-        ihmdep.hatrac_target(bad, "UID", "MD5", ".cif")
+    assert (common.SCHEME, common.HOST, common.CATALOG_ID) == expected
 
 
 # --------------------------------------------------------------------------
@@ -173,7 +148,7 @@ def parse(argv):
     captured = {}
     real = {}
     for name in ("do_status", "do_run", "do_download", "do_upload",
-                 "do_set_status", "do_delete", "do_login"):
+                 "do_set_status", "do_delete"):
         real[name] = getattr(ihmdep, name)
         setattr(ihmdep, name, lambda a, _n=name: captured.update(func=_n, args=a))
     try:
@@ -226,96 +201,6 @@ def test_broken_pipe_is_not_a_traceback(monkeypatch, capsys):
         ihmdep.main()
     assert caught.value.code == 141
     assert "Traceback" not in capsys.readouterr().err
-
-
-# --------------------------------------------------------------------------
-# logout
-# --------------------------------------------------------------------------
-
-TOKEN = {"access_token": "a", "refresh_token": "r", "expires_at_seconds": 9e11,
-         "scope": "https://auth.globus.org/scopes/x/deriva_all"}
-
-
-def logged_in(tmp_path, monkeypatch):
-    import json as _json
-    store = tmp_path / "tokens.json"
-    store.write_text(_json.dumps(TOKEN))
-    monkeypatch.setattr(ihmdep, "OUR_TOKENS", str(store))
-    monkeypatch.setattr(ihmdep, "DERIVA_TOKENS", str(tmp_path / "absent.json"))
-    return store
-
-
-def test_logout_revokes_then_deletes(tmp_path, monkeypatch, capsys):
-    store = logged_in(tmp_path, monkeypatch)
-    revoked = []
-    monkeypatch.setattr(ihmdep, "_revoke", lambda t: revoked.append(t) or True)
-
-    ihmdep.do_logout(types.SimpleNamespace(local=False))
-    assert sorted(revoked) == ["a", "r"], "both tokens must be revoked"
-    assert not store.exists()
-
-
-def test_logout_local_does_not_contact_globus(tmp_path, monkeypatch):
-    store = logged_in(tmp_path, monkeypatch)
-
-    def fail(_token):
-        raise AssertionError("--local must not reach the network")
-
-    monkeypatch.setattr(ihmdep, "_revoke", fail)
-    ihmdep.do_logout(types.SimpleNamespace(local=True))
-    assert not store.exists()
-
-
-def test_logout_deletes_even_if_revocation_fails(tmp_path, monkeypatch, capsys):
-    """The user asked to be logged out; an unreachable Globus must not block it."""
-    store = logged_in(tmp_path, monkeypatch)
-    monkeypatch.setattr(ihmdep, "_revoke", lambda t: False)
-
-    ihmdep.do_logout(types.SimpleNamespace(local=False))
-    assert not store.exists()
-    assert "could not revoke" in capsys.readouterr().err
-
-
-def test_logout_when_not_logged_in(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(ihmdep, "OUR_TOKENS", str(tmp_path / "absent.json"))
-    monkeypatch.setattr(ihmdep, "DERIVA_TOKENS", str(tmp_path / "also-absent.json"))
-    ihmdep.do_logout(types.SimpleNamespace(local=False))
-    assert "not logged in" in capsys.readouterr().err
-
-
-def test_logout_reports_derivas_own_store(tmp_path, monkeypatch, capsys):
-    """We read deriva-py's file but never write it, so we must not delete it."""
-    import json as _json
-    deriva = tmp_path / "deriva.json"
-    deriva.write_text(_json.dumps({"usc_isrd": TOKEN}))
-    monkeypatch.setattr(ihmdep, "OUR_TOKENS", str(tmp_path / "absent.json"))
-    monkeypatch.setattr(ihmdep, "DERIVA_TOKENS", str(deriva))
-
-    ihmdep.do_logout(types.SimpleNamespace(local=False))
-    assert deriva.exists(), "deriva-py's store is not ours to remove"
-    assert "deriva-globus-auth-utils logout" in capsys.readouterr().err
-
-
-def test_broken_pipe_while_flushing_is_not_a_traceback(monkeypatch, capsys):
-    """Output that fits the buffer only fails when the interpreter flushes at
-    shutdown, where nothing can catch it -- so main() must flush itself."""
-    class ClosedPipe:
-        def write(self, _text):
-            return 0                      # buffered, no error yet
-
-        def flush(self):
-            raise BrokenPipeError(32, "Broken pipe")
-
-        def isatty(self):
-            return False
-
-    monkeypatch.setattr(ihmdep, "do_status", lambda a: None)
-    monkeypatch.setattr(sys, "argv", ["ihmdep", "get_status"])
-    monkeypatch.setattr(sys, "stdout", ClosedPipe())
-
-    with pytest.raises(SystemExit) as caught:
-        ihmdep.main()
-    assert caught.value.code == 141
 
 
 # --------------------------------------------------------------------------
