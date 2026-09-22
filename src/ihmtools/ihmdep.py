@@ -98,6 +98,9 @@ def do_upload(args):
     if args.file and args.ihmcif and args.file != args.ihmcif:
         sys.exit("two different mmCIF files given (%s and --ihmcif %s)" % (args.file, args.ihmcif))
 
+    # Salt before hashing: the whole point is a different md5.
+    path, image = common.apply_salt(args, path, args.image)
+
     catalog, store = connect()
     uid = whoami(catalog).rsplit("/", 1)[-1]
 
@@ -106,9 +109,9 @@ def do_upload(args):
     mmcif_asset = get(catalog, asset_path("mmCIF_File_URL"))
     mmcif_prep = prepare_asset(path, mmcif_asset, MMCIF_EXT)
     image_asset = image_prep = None
-    if args.image:
+    if image:
         image_asset = get(catalog, asset_path("Image_File_URL"))
-        image_prep = prepare_asset(args.image, image_asset, IMAGE_EXT)
+        image_prep = prepare_asset(image, image_asset, IMAGE_EXT)
 
     existing = get(catalog, "/entity/PDB:entry/mmCIF_File_MD5=%s&%s"
                             % (mmcif_prep["md5"], mine(catalog)))
@@ -450,6 +453,7 @@ def main():
                        help="create as DRAFT instead of DEPO, so nothing runs yet")
         q.add_argument("-f", "--force", action="store_true",
                        help="deposit again even if this file was already deposited")
+        common.add_salt(q)
         return q
 
     common.add_auth_commands(add)

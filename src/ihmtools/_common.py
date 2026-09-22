@@ -11,7 +11,12 @@ import argparse
 import json
 import os
 import re
+import struct
 import sys
+import tempfile
+import time
+import uuid
+import zlib
 
 import requests
 from deriva.core import DerivaServer, HatracStore, get_credential, urlquote
@@ -242,6 +247,75 @@ def put_asset(store, prepared, asset, uid):
 
 
 # --------------------------------------------------------------------------
+# salting -- making a test file new again
+# --------------------------------------------------------------------------
+
+def salt_mmcif(data, salt):
+    """A trailing CIF comment. Core syntax, and it touches no data item."""
+    return data.rstrip(b"\n") + b"\n# ihmtools-salt: %s\n" % salt.encode("ascii")
+
+
+def salt_png(data, salt):
+    """A tEXt chunk inserted before IEND.
+
+    Changes the md5 without touching a pixel, and keeps the file a valid PNG
+    -- which appending bytes past IEND would leave to the decoder's mercy.
+    """
+    payload = b"Comment\0ihmtools-salt: " + salt.encode("latin-1")
+    chunk = (struct.pack(">I", len(payload)) + b"tEXt" + payload
+             + struct.pack(">I", zlib.crc32(b"tEXt" + payload) & 0xffffffff))
+    iend = data.rindex(b"IEND") - 4         # back up over the length field
+    return data[:iend] + chunk + data[iend:]
+
+
+SALTERS = {".cif": salt_mmcif, ".png": salt_png}
+
+
+def salted(path, salt, outdir):
+    """Write a copy of `path` with `salt` worked into its name and its bytes.
+
+    Both tools dedupe on md5 and Hatrac is content-addressed, so re-uploading
+    an unchanged file matches the record a previous run left behind instead of
+    depositing anything -- which is exactly right in production and exactly
+    wrong when the point is to exercise the pipeline again.
+    """
+    stem, ext = os.path.splitext(os.path.basename(path))
+    salter = SALTERS.get(ext.lower())
+    if salter is None:
+        sys.exit("%s: cannot salt a %s file, only %s"
+                 % (path, ext or "extensionless", " / ".join(sorted(SALTERS))))
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError as e:
+        sys.exit("%s: %s" % (path, e.strerror or e))
+
+    out = os.path.join(outdir, "%s_%s%s" % (stem, salt, ext))
+    with open(out, "wb") as fh:
+        fh.write(salter(data, salt))
+    return out
+
+
+def apply_salt(args, *paths):
+    """Salted copies of `paths` when --salt was given, otherwise the originals.
+
+    The copies go to a temporary directory rather than beside the originals,
+    so repeated test runs do not silt up the working tree. The path is printed
+    because a failed upload is much easier to chase with the exact bytes.
+    """
+    if not getattr(args, "salt", False):
+        return paths
+    # Timestamp to read, random tail to be sure: two uploads in the same second
+    # would otherwise share a salt, dedupe against each other, and silently do
+    # the one thing --salt exists to prevent.
+    salt = time.strftime("%Y%m%d%H%M%S") + "_" + uuid.uuid4().hex[:6]
+    outdir = tempfile.mkdtemp(prefix="ihmtools-salt-")
+    out = tuple(salted(p, salt, outdir) if p else p for p in paths)
+    print("salted with %s: %s" % (salt, ", ".join(p for p in out if p)), file=sys.stderr)
+    return out
+
+
+# --------------------------------------------------------------------------
 # CLI conventions
 # --------------------------------------------------------------------------
 
@@ -335,6 +409,19 @@ def confirm(prompt):
 # --------------------------------------------------------------------------
 # argument plumbing
 # --------------------------------------------------------------------------
+
+def add_salt(q):
+    """--salt takes no value on purpose.
+
+    The commands that accept it also take a positional filename, so an option
+    with an optional value would read `--salt model.cif` as the salt and then
+    report no file -- the same trap that keeps --wait and --interval apart.
+    """
+    q.add_argument("--salt", action="store_true",
+                   help="upload a timestamped copy, so a file already deposited "
+                        "is deposited again rather than matched by md5")
+    return q
+
 
 def add_rids(q, what="one or more RIDs, or '-' to read them from stdin"):
     """The positional/--rid pair every RID-taking subcommand repeats."""

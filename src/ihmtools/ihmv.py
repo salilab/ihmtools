@@ -60,6 +60,9 @@ SETTABLE = ("New", "Reprocess")
 # --------------------------------------------------------------------------
 
 def do_upload(args):
+    # Salt before hashing: the whole point is a different md5.
+    path, = common.apply_salt(args, args.file)
+
     catalog, store = connect()
     uid = whoami(catalog).rsplit("/", 1)[-1]
 
@@ -67,7 +70,7 @@ def do_upload(args):
     # submitted-file namespace differs between dev and production, and this is
     # the same annotation the web UI obeys.
     asset = get(catalog, ASSET_ANNOTATION)
-    prep = prepare_asset(args.file, asset, ALLOWED_EXT, refusal=REFUSAL)
+    prep = prepare_asset(path, asset, ALLOWED_EXT, refusal=REFUSAL)
     title = args.title or "%s_%s" % (os.path.splitext(prep["name"])[0],
                                      uuid.uuid4().hex[:8])
 
@@ -273,8 +276,12 @@ def do_delete(args):
     for rid in rids:
         # Reports first: if the second call fails the record still exists and
         # the delete can be retried, rather than leaving orphaned reports.
-        check(catalog.delete,
-              "/entity/IHMV:Generated_File/Structure_mmCIF=%s" % urlquote(rid))
+        # Only when there are some -- ERMrest answers a delete that matches
+        # nothing with 404, so asking unconditionally fails on any entry the
+        # pipeline has not finished with yet.
+        if reports.get(rid):
+            check(catalog.delete,
+                  "/entity/IHMV:Generated_File/Structure_mmCIF=%s" % urlquote(rid))
         check(catalog.delete,
               "/entity/IHMV:Structure_mmCIF/RID=%s" % urlquote(rid))
         print(rid)
@@ -349,6 +356,7 @@ def main():
         q.add_argument("-d", "--description")
         q.add_argument("-f", "--force", action="store_true",
                        help="submit again even if this file was already submitted")
+        common.add_salt(q)
         return q
 
     common.add_auth_commands(add)

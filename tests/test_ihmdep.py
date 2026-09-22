@@ -189,6 +189,23 @@ def test_no_wait_by_default(monkeypatch):
     args = parse(None)
     assert args.rids == ["300"] and args.wait is False
 
+@pytest.mark.parametrize("argv", [
+    ["upload", "model.cif", "--salt"],
+    ["upload", "--salt", "model.cif"],
+    ["run", "--salt", "model.cif"],
+])
+def test_salt_never_swallows_the_filename(monkeypatch, argv):
+    """--salt takes no value precisely so it cannot eat the positional."""
+    monkeypatch.setattr(sys, "argv", ["ihmdep"] + argv)
+    args = parse(argv)
+    assert args.file == "model.cif"
+    assert args.salt is True
+
+
+def test_no_salt_by_default(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["ihmdep", "upload", "model.cif"])
+    assert parse(["upload", "model.cif"]).salt is False
+
 
 def test_broken_pipe_is_not_a_traceback(monkeypatch, capsys):
     """`ihmdep get_status -a | head` closes the pipe; that is normal."""

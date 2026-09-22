@@ -152,6 +152,26 @@ ihmv get_status --wait "$RID" && ihmv download "$RID" -o reports/
 separate because a RID can be all digits, and an option that took an optional
 value would read `--wait 300` as an interval rather than as RID 300.
 
+### Re-uploading the same file
+
+Both tools dedupe on md5, so uploading a file you have already deposited
+returns the existing RID instead of making a new entry. That is what you want
+in production and the opposite of what you want while testing, so `upload` and
+`run` take `--salt`:
+
+```bash
+ihmdep --mode dev upload model.cif --image model.png --salt
+```
+
+It uploads a timestamped copy — a trailing `# ihmtools-salt:` comment in the
+mmCIF, a `tEXt` chunk in the PNG — so the name and the md5 are both new and
+nothing has to be edited by hand. The copies go to a temporary directory,
+whose path is printed. `--salt` takes no value, for the same reason `--wait`
+does not: it sits beside a positional filename.
+
+Use `--force` instead when you want the file you actually have on disk
+deposited a second time, byte for byte.
+
 Depositing several entries works the same way. `upload` prints nothing but
 the RID on stdout, so the loop's output is the RID list, and every later
 command reads it back with `-`.

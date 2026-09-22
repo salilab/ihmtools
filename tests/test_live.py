@@ -21,12 +21,11 @@ leaves one record on dev. Both RIDs are printed.
 """
 
 import os
-import struct
+import pathlib
 import subprocess
 import sys
 import time
 import types
-import zlib
 
 import pytest
 
@@ -96,63 +95,28 @@ def entry_columns(rid, columns):
 
 
 @pytest.fixture(scope="module")
-def stamp():
-    """One timestamp per run, shared by every generated file."""
+def salt():
+    """One value per run, shared by every generated file."""
     return time.strftime("%Y%m%d%H%M%S")
 
 
 @pytest.fixture(scope="module")
-def unique_cif(tmp_path_factory, stamp):
-    """A real entry, stamped so that both its name and its md5 are new.
-
-    Both tools dedupe on md5, so an unmodified file would match the previous
-    run's record and the test would assert against that instead of depositing.
-    The stamp goes in the content as well as the filename, since the filename
-    alone does not reach the md5.
-    """
-    marker = "ihmtools live test %s" % stamp
-
-    with open(TEMPLATE) as fh:
-        text = fh.read()
-    stamped = text.replace("_struct.pdbx_model_details\t.",
-                           '_struct.pdbx_model_details\t"%s"' % marker, 1)
-    assert stamped != text, "%s no longer has an empty _struct.pdbx_model_details" % TEMPLATE
-
-    path = tmp_path_factory.mktemp("live") / ("ihmtools_live_%s.cif" % stamp)
-    path.write_text(stamped)
-    return path
-
-
-def png_with_text(data, keyword, text):
-    """Insert a tEXt chunk just before IEND.
-
-    Changes the file's md5 without touching a pixel, and keeps it a valid PNG
-    -- which writing one from scratch would not, and Pillow is not a
-    dependency of anything here.
-    """
-    payload = keyword.encode("latin-1") + b"\0" + text.encode("latin-1")
-    chunk = (struct.pack(">I", len(payload)) + b"tEXt" + payload
-             + struct.pack(">I", zlib.crc32(b"tEXt" + payload) & 0xffffffff))
-    iend = data.rindex(b"IEND") - 4         # back up over the length field
-    return data[:iend] + chunk + data[iend:]
+def salt_dir(tmp_path_factory):
+    return str(tmp_path_factory.mktemp("salted"))
 
 
 @pytest.fixture(scope="module")
-def unique_png(tmp_path_factory, stamp):
-    """The entry's real preview image, stamped so this run's copy is its own.
+def unique_cif(salt, salt_dir):
+    """This run's own copy of a real entry, via the same code `--salt` uses."""
+    return pathlib.Path(common.salted(TEMPLATE, salt, salt_dir))
 
-    Hatrac is content-addressed, so an unstamped image would silently reuse the
-    object a previous run uploaded -- which passes, but proves nothing about
-    the upload path.
-    """
-    with open(TEMPLATE_IMAGE, "rb") as fh:
-        data = fh.read()
-    stamped = png_with_text(data, "Comment", "ihmtools live test %s" % stamp)
-    assert stamped.startswith(b"\x89PNG\r\n\x1a\n") and stamped.endswith(b"IEND\xaeB`\x82")
 
-    path = tmp_path_factory.mktemp("live") / ("ihmtools_live_%s.png" % stamp)
-    path.write_bytes(stamped)
-    return path
+@pytest.fixture(scope="module")
+def unique_png(salt, salt_dir):
+    """Likewise for the preview image -- Hatrac is content-addressed, so an
+    unsalted copy would resolve to the object a previous run uploaded and the
+    transfer would be skipped on the md5 match."""
+    return pathlib.Path(common.salted(TEMPLATE_IMAGE, salt, salt_dir))
 
 
 def test_ihmdep_deposit_to_submit(unique_cif, unique_png, tmp_path):

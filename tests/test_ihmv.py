@@ -131,6 +131,23 @@ def test_no_wait_by_default(monkeypatch):
     args = parse(None)
     assert args.rids == ["300"] and args.wait is False
 
+@pytest.mark.parametrize("argv", [
+    ["upload", "model.cif", "--salt"],
+    ["upload", "--salt", "model.cif"],
+    ["run", "--salt", "model.cif"],
+])
+def test_salt_never_swallows_the_filename(monkeypatch, argv):
+    """--salt takes no value precisely so it cannot eat the positional."""
+    monkeypatch.setattr(sys, "argv", ["ihmv"] + argv)
+    args = parse(argv)
+    assert args.file == "model.cif"
+    assert args.salt is True
+
+
+def test_no_salt_by_default(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["ihmv", "upload", "model.cif"])
+    assert parse(["upload", "model.cif"]).salt is False
+
 
 def test_broken_pipe_is_not_a_traceback(monkeypatch, capsys):
     """`ihmv get_status | head` closes the pipe; that is normal, not a crash."""
@@ -144,3 +161,40 @@ def test_broken_pipe_is_not_a_traceback(monkeypatch, capsys):
     # 128 + SIGPIPE, the status a program killed by SIGPIPE reports
     assert caught.value.code == 141
     assert "Traceback" not in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------
+# delete
+# --------------------------------------------------------------------------
+
+def test_delete_skips_the_report_sweep_when_there_are_none(monkeypatch):
+    """ERMrest answers a delete matching nothing with 404, so an entry the
+    pipeline has not finished with yet could not be deleted at all."""
+    deleted = []
+    catalog = types.SimpleNamespace(delete=lambda path, **kw: deleted.append(path))
+    monkeypatch.setattr(ihmv, "connect", lambda: (catalog, None))
+    monkeypatch.setattr(ihmv, "get", lambda _c, path: (
+        [] if "Generated_File" in path
+        else [{"RID": "R", "Title": "t", "Processing_Status": "In Progress",
+               "File_MD5": "m", "File_URL": "/hatrac/x"}]))
+
+    ihmv.do_delete(types.SimpleNamespace(rids=["R"], rid_flags=None, yes=True,
+                                         purge_file=False))
+    assert not any("Generated_File" in p for p in deleted)
+    assert any("Structure_mmCIF/RID=R" in p for p in deleted)
+
+
+def test_delete_sweeps_reports_when_there_are_some(monkeypatch):
+    deleted = []
+    catalog = types.SimpleNamespace(delete=lambda path, **kw: deleted.append(path))
+    monkeypatch.setattr(ihmv, "connect", lambda: (catalog, None))
+    monkeypatch.setattr(ihmv, "get", lambda _c, path: (
+        [{"Structure_mmCIF": "R"}] if "Generated_File" in path
+        else [{"RID": "R", "Title": "t", "Processing_Status": "Success",
+               "File_MD5": "m", "File_URL": "/hatrac/x"}]))
+
+    ihmv.do_delete(types.SimpleNamespace(rids=["R"], rid_flags=None, yes=True,
+                                         purge_file=False))
+    # Reports first: a failure on the second call must leave the record behind
+    # to retry, not orphan its reports.
+    assert [("Generated_File" in p) for p in deleted] == [True, False]

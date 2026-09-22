@@ -5,8 +5,11 @@ now, which is the point of the module.
 """
 
 import io
+import pathlib
+import struct
 import sys
 import types
+import zlib
 
 import pytest
 
@@ -305,3 +308,79 @@ def test_each_front_end_routes_through_dispatch(monkeypatch, name):
     with pytest.raises(SystemExit) as caught:
         mod.main()
     assert caught.value.code == 141
+
+
+# --------------------------------------------------------------------------
+# salting -- making an already-deposited file new again
+# --------------------------------------------------------------------------
+
+CIF = b"data_TEST\n_struct.entry_id TEST\n"
+
+
+def png_chunk(kind, body=b""):
+    return (struct.pack(">I", len(body)) + kind + body
+            + struct.pack(">I", zlib.crc32(kind + body) & 0xffffffff))
+
+
+PNG = (b"\x89PNG\r\n\x1a\n" + png_chunk(b"IHDR", b"\0" * 13) + png_chunk(b"IEND"))
+
+
+def test_salt_mmcif_is_a_comment():
+    """A trailing '#' comment is core CIF syntax and touches no data item."""
+    out = common.salt_mmcif(CIF, "S")
+    assert out.startswith(CIF.rstrip(b"\n"))
+    assert out.splitlines()[-1] == b"# ihmtools-salt: S"
+
+
+def test_salt_mmcif_changes_the_hash():
+    assert common.salt_mmcif(CIF, "A") != common.salt_mmcif(CIF, "B")
+
+
+def test_salt_png_keeps_every_chunk_valid():
+    """Appending past IEND would leave validity to the decoder; this inserts."""
+    out = common.salt_png(PNG, "S")
+    assert out.startswith(b"\x89PNG\r\n\x1a\n")
+    off, seen = 8, []
+    while off < len(out):
+        length, kind = struct.unpack(">I4s", out[off:off + 8])
+        body = out[off + 8:off + 8 + length]
+        crc, = struct.unpack(">I", out[off + 8 + length:off + 12 + length])
+        assert zlib.crc32(kind + body) & 0xffffffff == crc, "%s has a bad CRC" % kind
+        seen.append(kind)
+        off += 12 + length
+    assert seen == [b"IHDR", b"tEXt", b"IEND"], "the chunk must land before IEND"
+    assert off == len(out), "no trailing bytes past IEND"
+
+
+def test_salted_renames_and_rewrites(tmp_path):
+    src = tmp_path / "model.cif"
+    src.write_bytes(CIF)
+    out = pathlib.Path(common.salted(str(src), "20260101000000", str(tmp_path)))
+
+    assert out.name == "model_20260101000000.cif"
+    assert out.read_bytes() != CIF
+    assert src.read_bytes() == CIF, "the original must not be touched"
+
+
+def test_salted_refuses_a_format_it_cannot_salt(tmp_path):
+    """Silently uploading an unsalted file would look like success."""
+    src = tmp_path / "notes.txt"
+    src.write_bytes(b"hello")
+    with pytest.raises(SystemExit):
+        common.salted(str(src), "S", str(tmp_path))
+
+
+def test_apply_salt_is_a_no_op_without_the_flag():
+    args = types.SimpleNamespace(salt=False)
+    assert common.apply_salt(args, "a.cif", None) == ("a.cif", None)
+
+
+def test_apply_salt_leaves_a_missing_optional_alone(tmp_path, capsys):
+    """ihmdep passes (mmcif, image) and the image is usually absent."""
+    src = tmp_path / "model.cif"
+    src.write_bytes(CIF)
+    cif, image = common.apply_salt(types.SimpleNamespace(salt=True), str(src), None)
+
+    assert image is None
+    assert pathlib.Path(cif).read_bytes() != CIF
+    assert "salted with" in capsys.readouterr().err
