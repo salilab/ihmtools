@@ -30,7 +30,7 @@ import types
 import pytest
 
 from ihmtools import _common as common
-from ihmtools import ihmdep
+from ihmtools import ihmdep, ihmv
 
 pytestmark = pytest.mark.live
 
@@ -48,6 +48,37 @@ POLL = os.environ.get("IHMTOOLS_LIVE_INTERVAL", "30")
 
 # The states an entry passes through before it is submitted.
 PRE_SUBMIT = ("DRAFT", "DEPO", "RECORD READY")
+
+# What MODE must actually resolve to, per tool. Both front ends default to
+# production, so nothing here may be left to a default.
+DEV_TARGET = {ihmv: ("data-dev.pdb-ihm.org", "199"),
+              ihmdep: ("data-dev.pdb-ihm.org", "99")}
+
+
+def resolves_to(module):
+    """Where MODE sends this tool, resolved by the CLI's own configure()."""
+    flags = {k.lstrip("-"): v for k, v in zip(MODE[::2], MODE[1::2])}
+    module.configure(types.SimpleNamespace(**flags))
+    return common.HOST, common.CATALOG_ID
+
+
+@pytest.fixture(scope="module", autouse=True)
+def dev_only():
+    """Abort the whole module unless every command would reach dev.
+
+    These deposit real records and end in SUBMIT, which cannot be undone from
+    the CLI, so the target is checked rather than assumed. --mode beats
+    IHMV_HOST/IHMDEP_HOST in configure()'s precedence, but this proves it for
+    the environment actually in force rather than trusting the ordering.
+    """
+    assert "--mode" in MODE and "production" not in MODE, "MODE must pin dev"
+    assert "--host" not in MODE and "--catalog" not in MODE, \
+        "MODE must not override the host or catalog; dev is picked by --mode"
+    for module, expected in DEV_TARGET.items():
+        got = resolves_to(module)
+        assert got == expected, (
+            "%s would target %s, not dev %s -- refusing to deposit"
+            % (module.__name__, got, expected))
 
 
 def run(tool, *args, **kwargs):

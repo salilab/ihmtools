@@ -300,6 +300,11 @@ pytest -m live          # ihmdep: upload + image -> wait -> RECORD READY -> SUBM
                         # ihmv:   upload -> wait -> download both reports
 ```
 
+They refuse to start unless every command would reach **dev**: the fixture
+resolves `--mode dev` through the CLIs' own `configure()` and checks the host
+and catalog it lands on, so neither an edit to the mode constant nor an
+`IHMV_HOST`/`IHMDEP_HOST` in the environment can point them at production.
+
 These need a login. Each run salts its own copy of
 `examples/G_1000003/9A7U.cif` and `9A7U.png` through the same
 `--salt` machinery described above, because both tools dedupe on md5 and
