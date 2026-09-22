@@ -487,6 +487,20 @@ class RecordingGlobus(FakeGlobus):
         self.login_kwargs = kwargs
 
 
+def test_login_reports_the_identity_it_landed_on(monkeypatch, capsys):
+    """The pasted code says nothing about which account it was, so say it."""
+    fake = RecordingGlobus()
+    monkeypatch.setattr(common, "_globus", lambda: fake)
+    monkeypatch.setattr(common, "connect", lambda: (FakeClient(), None))
+    aim_at()
+
+    common.do_login(types.SimpleNamespace(browser=False))
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "someone@example.org (442a6439-c239)"
+    assert "server" in captured.err and "groups" in captured.err
+    assert "tokens" in captured.err, "say where the credentials landed"
+
+
 @pytest.mark.parametrize("browser, no_browser", [(False, True), (True, False)])
 def test_login_does_not_open_a_browser_unless_asked(monkeypatch, browser, no_browser):
     """deriva-py opens one by default. Whichever browser it picks may be signed

@@ -90,9 +90,10 @@ def do_login(args):
     """
     _globus().login(hosts=[HOST], no_local_server=True, no_browser=not args.browser,
                     refresh_tokens=True)
+    # Report in full, unasked: which account a login landed on is the one thing
+    # worth checking straight away, and the code you just pasted does not say.
     catalog, _ = connect()
-    print("Logged in as %s" % whoami(catalog))
-    print("Credentials saved to %s" % DEFAULT_GLOBUS_CREDENTIAL_FILE)
+    report_identity(catalog, verbose=True)
 
 
 def do_logout(args):
@@ -210,21 +211,36 @@ def whoami(catalog):
     return IDENTITY["id"]
 
 
+def report_identity(catalog, verbose=False):
+    """Who the server says we are: the identity on stdout, the rest on stderr.
+
+    Split that way so WHO=$(ihmv whoami) works whether or not -v was given.
+    """
+    global IDENTITY
+    session = check(catalog.get_authn_session).json()
+    IDENTITY = client = session["client"]
+    print(describe(client))
+    if not verbose:
+        return
+    # Flush first: stdout is block-buffered when redirected, so without this
+    # the identity would surface after the detail that explains it.
+    sys.stdout.flush()
+    # The identity appears among its own attributes; the groups are the rest,
+    # and they are what actually decide which catalogs it can reach.
+    groups = sorted({a["display_name"] for a in session.get("attributes", [])
+                     if a.get("display_name") and a["id"] != client["id"]})
+    for label, value in (("server", "%s catalog %s" % (URL, CATALOG_ID)),
+                         ("full", "%s <%s>" % (client.get("full_name") or "-",
+                                               client.get("email") or "-")),
+                         ("groups", ", ".join(groups) or "none"),
+                         ("tokens", DEFAULT_GLOBUS_CREDENTIAL_FILE)):
+        print("  %-8s %s" % (label, value), file=sys.stderr)
+
+
 def do_whoami(args):
     """Which account the stored credentials belong to, and what it can reach."""
     catalog, _ = connect()
-    session = check(catalog.get_authn_session).json()
-    client = session["client"]
-    print(describe(client))
-    if not args.verbose:
-        return
-    print("  server   %s catalog %s" % (URL, CATALOG_ID), file=sys.stderr)
-    print("  full     %s <%s>" % (client.get("full_name") or "-",
-                                  client.get("email") or "-"), file=sys.stderr)
-    # The identity itself appears among its own attributes; groups are the rest.
-    groups = sorted({a["display_name"] for a in session.get("attributes", [])
-                     if a.get("display_name") and a["id"] != client["id"]})
-    print("  groups   %s" % (", ".join(groups) or "none"), file=sys.stderr)
+    report_identity(catalog, args.verbose)
 
 
 def mine(catalog):

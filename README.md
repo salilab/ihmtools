@@ -27,13 +27,18 @@ account you did not mean. `whoami` says which one, and `-v` adds the groups
 that decide what it can reach:
 
 ```bash
-$ ihmv whoami
+$ ihmv whoami -v
 you@example.org (442a6439-c239-4ff0-af85-d479bc676497)
+  server   https://data-dev.pdb-ihm.org catalog 199
+  full     Your Name <you@example.org>
+  groups   pdb-reader, pdb-submitter, pdb-writer
+  tokens   /home/you/.deriva/globus-credential.json
 ```
 
-Only the identity goes to stdout, so `WHO=$(ihmv whoami)` works either way.
-An access-denied message names the account too — a 403 is more often the wrong
-one than a missing grant.
+`login` prints the same block when it finishes, since the code you pasted says
+nothing about which account it belonged to. Only the identity goes to stdout,
+so `WHO=$(ihmv whoami)` works with `-v` too. An access-denied message names the
+account as well — a 403 is more often the wrong one than a missing grant.
 
 [deriva-py]: https://github.com/informatics-isi-edu/deriva-py
 
@@ -308,7 +313,7 @@ pip install -e '.[test]'
 pytest
 ```
 
-137 tests, offline — no network, no credentials, nothing written.
+138 tests, offline — no network, no credentials, nothing written.
 
 Two further tests drive a full round trip against the **dev** servers and are
 deselected unless asked for:
