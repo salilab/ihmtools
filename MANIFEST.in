@@ -8,7 +8,9 @@ prune examples/9A8W_test
 prune examples/9A9W_test
 recursive-exclude examples *_test *_test/*
 
-# generated output, and the collection example (11 MB), stay out of the sdist
-exclude examples/9A9W/data/assembled.cif
-exclude examples/9A8W/data/assembled.cif
+# generated output, and the collection example (11 MB), stay out of the sdist.
+# By pattern, not by exact name: a local run leaves assembled.cif, and a second
+# one can leave assembled_1.cif, which an exact exclude would have shipped.
+recursive-exclude examples/9A9W/data assembled*.cif
+recursive-exclude examples/9A8W/data assembled*.cif
 prune examples/G_1000003
