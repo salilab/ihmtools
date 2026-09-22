@@ -201,6 +201,12 @@ def status_code(results):
 
 # One row shape shared by the listing and by `get_status -v`, so a verbose
 # lookup shows the same columns as the listing rather than a bare word.
+# Either status column, or both. "Success" on its own is ambiguous -- it is
+# the same word after the DEPO run and after the post-SUBMIT one -- and only
+# Workflow_Status says which stage it belongs to.
+STATUS_FIELDS = (("workflow", "WORKFLOW", "Workflow_Status"),
+                 ("process", "PROCESS", "Process_Status"))
+
 LIST_COLS = "RID,RMT,Accession_Code,Workflow_Status,Process_Status,mmCIF_File_Name"
 LIST_HEADERS = ["RID", "MODIFIED", "ACCESSION", "WORKFLOW", "PROCESS", "FILE"]
 
@@ -248,6 +254,8 @@ def do_status(args):
     def state_of(row):
         return row["Process_Status"] or row["Workflow_Status"]
 
+    asked = [f for f in STATUS_FIELDS if getattr(args, f[0], False)]
+
     if args.verbose:
         # Full listing row, then the detail -- same columns as a bare `get_status`.
         rows, notes = [], []
@@ -262,22 +270,27 @@ def do_status(args):
         sys.exit(code)
 
     if len(rids) == 1:
-        # Bare word, no header, so `$(ihmdep.py get_status RID)` is directly usable.
+        # Bare word, no header, so `$(ihmdep.py get_status RID)` is directly
+        # usable. Unasked, that word stays Process_Status, as it always was.
         rid, row = results[0]
-        if row:
-            print(state_of(row))
-        else:
+        if not row:
             print("%s: unknown RID" % rid, file=sys.stderr)
+            sys.exit(code)
+        if asked:
+            print("\t".join(row[col] or "-" for _, _, col in asked))
+        else:
+            print(state_of(row))
         sys.exit(code)
 
+    fields = asked or list(STATUS_FIELDS)
     rows = []
     for rid, row in results:
         if not row:
             sys.stdout.flush()
             print("%s: unknown RID" % rid, file=sys.stderr)
             continue
-        rows.append([rid, row["Workflow_Status"], state_of(row)])
-    emit_table(["RID", "WORKFLOW", "PROCESS"], rows)
+        rows.append([rid] + [row[col] or "-" for _, _, col in fields])
+    emit_table(["RID"] + [head for _, head, _ in fields], rows)
     sys.exit(code)
 
 
@@ -471,6 +484,12 @@ def main():
     q.add_argument("-a", "--all", action="store_true",
                    help="when listing, everyone's entries rather than just yours")
     q.add_argument("-v", "--verbose", action="store_true", help="print the full status detail")
+    # Which status to report. Neither given keeps the long-standing behaviour:
+    # a single RID prints Process_Status, several print both columns.
+    q.add_argument("--workflow", action="store_true",
+                   help="report Workflow_Status (DRAFT, DEPO, RECORD READY, SUBMIT, ...)")
+    q.add_argument("--process", action="store_true",
+                   help="report Process_Status (the backend's progress)")
     add_wait(q)
     q.set_defaults(func=do_status)
 

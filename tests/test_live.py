@@ -95,23 +95,6 @@ def run(tool, *args, **kwargs):
     return done
 
 
-def status_row(tool, rid):
-    """The full listing row for one RID, as a column -> value dict.
-
-    `get_status RID` alone prints a single word, and for a processed entry that
-    word is the Process_Status -- so to see the workflow state we need the
-    table, which is tab-separated whenever stdout is not a terminal.
-
-    expect=None because the exit code is the *answer* here, not a failure: 0
-    done, 1 error, 2 pending. Right after SUBMIT the entry is pending again.
-    """
-    out = run(tool, "get_status", "-v", rid, expect=None).stdout
-    lines = [line for line in out.splitlines() if line.strip()]
-    assert len(lines) >= 2, "expected a header and a row, got:\n%s" % out
-    header = lines[0].lstrip("#").split("\t")
-    return dict(zip(header, lines[1].split("\t")))
-
-
 def entry_columns(rid, columns):
     """Read a deposited row back from the catalog.
 
@@ -166,10 +149,11 @@ def test_ihmdep_deposit_to_submit(unique_cif, unique_png, tmp_path):
     run("ihmdep", "get_status", "--wait", "--interval", POLL, rid,
         timeout=WAIT_TIMEOUT, expect=0)
 
-    row = status_row("ihmdep", rid)
-    assert row["PROCESS"] == "Success", "backend did not finish cleanly: %s" % row
-    assert row["WORKFLOW"] == "RECORD READY", (
-        "SUBMIT is only legal from RECORD READY, but the entry is %s" % row["WORKFLOW"])
+    workflow, process = run("ihmdep", "get_status", rid, "--workflow", "--process",
+                            expect=None).stdout.strip().split("\t")
+    assert process == "Success", "backend did not finish cleanly: %s" % process
+    assert workflow == "RECORD READY", (
+        "SUBMIT is only legal from RECORD READY, but the entry is %s" % workflow)
 
     # set_status re-reads after writing, but the backend picks the entry up at
     # once and carries it past SUBMIT, so assert only that it left the states

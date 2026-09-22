@@ -258,3 +258,62 @@ def test_download_flags_match_the_selectors(monkeypatch, flag):
     assert getattr(args, flag) is True
     assert all(not getattr(args, other)
                for other in ihmdep.SELECTORS if other != flag)
+
+
+# --------------------------------------------------------------------------
+# get_status: which status column is reported
+# --------------------------------------------------------------------------
+
+def status_out(monkeypatch, capsys, rows, *flags):
+    """Run do_status over canned rows and return what lands on stdout."""
+    results = [(r["RID"], r) for r in rows]
+    monkeypatch.setattr(ihmdep, "poll_status", lambda _r, _v: results)
+    args = types.SimpleNamespace(
+        rids=[r["RID"] for r in rows], rid_flags=None, verbose=False,
+        wait=False, interval=1,
+        **{name: name in flags for name, _, _ in ihmdep.STATUS_FIELDS})
+    with pytest.raises(SystemExit):
+        ihmdep.do_status(args)
+    return capsys.readouterr().out.strip()
+
+
+READY = {"RID": "A", "Workflow_Status": "RECORD READY", "Process_Status": "Success"}
+CREATED = {"RID": "B", "Workflow_Status": "mmCIF CREATED", "Process_Status": "Success"}
+
+
+def test_single_rid_still_prints_the_bare_process_word(monkeypatch, capsys):
+    """$(ihmdep get_status RID) is a documented contract; it must not change."""
+    assert status_out(monkeypatch, capsys, [READY]) == "Success"
+
+
+def test_single_rid_can_report_the_workflow_instead(monkeypatch, capsys):
+    """'Success' is the same word after DEPO and after SUBMIT -- only the
+    workflow state says which run it belonged to."""
+    assert status_out(monkeypatch, capsys, [READY], "workflow") == "RECORD READY"
+    assert status_out(monkeypatch, capsys, [CREATED], "workflow") == "mmCIF CREATED"
+
+
+def test_single_rid_can_report_both(monkeypatch, capsys):
+    out = status_out(monkeypatch, capsys, [CREATED], "workflow", "process")
+    assert out.split("\t") == ["mmCIF CREATED", "Success"]
+
+
+def test_several_rids_report_both_by_default(monkeypatch, capsys):
+    lines = status_out(monkeypatch, capsys, [READY, CREATED]).splitlines()
+    assert lines[0].split("\t") == ["#RID", "WORKFLOW", "PROCESS"]
+    assert lines[1].split("\t") == ["A", "RECORD READY", "Success"]
+
+
+def test_several_rids_narrow_to_the_asked_column(monkeypatch, capsys):
+    lines = status_out(monkeypatch, capsys, [READY, CREATED], "workflow").splitlines()
+    assert lines[0].split("\t") == ["#RID", "WORKFLOW"]
+    assert [l.split("\t")[1] for l in lines[1:]] == ["RECORD READY", "mmCIF CREATED"]
+
+
+@pytest.mark.parametrize("flag", ["workflow", "process"])
+def test_status_flags_parse(monkeypatch, flag):
+    argv = ["get_status", "R", "--" + flag]
+    monkeypatch.setattr(sys, "argv", ["ihmdep"] + argv)
+    args = parse(argv)
+    assert getattr(args, flag) is True
+    assert args.rids == ["R"], "a status flag must not swallow the RID"
