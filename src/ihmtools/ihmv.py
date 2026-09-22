@@ -5,6 +5,7 @@ Built on deriva-py: ErmrestCatalog for records, HatracStore for files, and
 GlobusNativeLogin for authentication.
 
     ihmv.py login                    authenticate with Globus (once)
+    ihmv.py whoami                   which account you are logged in as
     ihmv.py upload model.cif         submit a structure for validation
     ihmv.py run model.cif            upload and block until validation finishes
     ihmv.py get_status               list entries, newest first

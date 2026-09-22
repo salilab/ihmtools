@@ -38,6 +38,10 @@ LEGACY_TOKENS = os.path.expanduser("~/.config/ihmv/tokens.json")
 # the bare hostname apart; URL is the two rejoined, for printed messages.
 SCHEME, HOST, CATALOG_ID, URL = None, None, None, None
 
+# Filled in the first time the server tells us who it thinks we are. A 403 is
+# far more often the wrong account than a missing grant, so say which account.
+IDENTITY = None
+
 
 class NeedLogin(Exception):
     pass
@@ -143,6 +147,30 @@ def connect():
     return server.connect_ermrest(CATALOG_ID), HatracStore(SCHEME, HOST, cred)
 
 
+def describe(client):
+    """An identity a human can recognise at a glance."""
+    if not client:
+        return "the stored credentials"
+    name = client.get("display_name") or client.get("email") or "unknown"
+    return "%s (%s)" % (name, client["id"].rsplit("/", 1)[-1])
+
+
+def identify(client_obj):
+    """Ask the server who we are, for an error message. Never raises.
+
+    Called with whatever deriva-py object just failed, so it reuses the
+    authenticated session rather than building another -- and directly, not
+    through check(), so a second failure cannot recurse.
+    """
+    global IDENTITY
+    if IDENTITY is None and client_obj is not None:
+        try:
+            IDENTITY = client_obj.get_authn_session().json()["client"]
+        except Exception:                       # diagnosis is best effort
+            return None
+    return IDENTITY
+
+
 def check(call, *args, **kwargs):
     """Run one deriva-py call, turning its HTTPError into our own exits."""
     try:
@@ -154,12 +182,17 @@ def check(call, *args, **kwargs):
         if r.status_code == 401:
             raise NeedLogin("server rejected the token")
         if r.status_code == 403:
-            # Authentication worked, so this is a permission -- but on what? It
-            # is the catalog for an ERMrest path and the object for a Hatrac
-            # one, and those need different fixes, so name the URL.
-            sys.exit("Access denied: %s\nYour identity is authenticated but not "
-                     "permitted here.\nFor catalog access, request membership: %s"
-                     % (r.url, GROUP_SIGNUP))
+            # Authentication worked, so this is a permission -- but whose, and
+            # on what? It is the catalog for an ERMrest path and the object for
+            # a Hatrac one, and in practice it is most often simply the wrong
+            # account, so name both the identity and the URL.
+            tool = os.path.basename(sys.argv[0]) or "ihmv"
+            sys.exit("Access denied: %s\n"
+                     "Authenticated as %s, which is not permitted here.\n"
+                     "Wrong account? %s logout, then %s login.\n"
+                     "Otherwise request catalog membership: %s"
+                     % (r.url, describe(identify(getattr(call, "__self__", None))),
+                        tool, tool, GROUP_SIGNUP))
         sys.exit("%s %s\n%s" % (r.status_code, r.reason, r.text[:400]))
 
 
@@ -168,7 +201,26 @@ def get(catalog, path):
 
 
 def whoami(catalog):
-    return check(catalog.get_authn_session).json()["client"]["id"]
+    global IDENTITY
+    IDENTITY = check(catalog.get_authn_session).json()["client"]
+    return IDENTITY["id"]
+
+
+def do_whoami(args):
+    """Which account the stored credentials belong to, and what it can reach."""
+    catalog, _ = connect()
+    session = check(catalog.get_authn_session).json()
+    client = session["client"]
+    print(describe(client))
+    if not args.verbose:
+        return
+    print("  server   %s catalog %s" % (URL, CATALOG_ID), file=sys.stderr)
+    print("  full     %s <%s>" % (client.get("full_name") or "-",
+                                  client.get("email") or "-"), file=sys.stderr)
+    # The identity itself appears among its own attributes; groups are the rest.
+    groups = sorted({a["display_name"] for a in session.get("attributes", [])
+                     if a.get("display_name") and a["id"] != client["id"]})
+    print("  groups   %s" % (", ".join(groups) or "none"), file=sys.stderr)
 
 
 def mine(catalog):
@@ -485,6 +537,11 @@ def add_auth_commands(add, login_fn=do_login, logout_fn=do_logout):
     q.add_argument("--local", action="store_true",
                    help="only delete the local file; leave the token valid at Globus")
     q.set_defaults(func=logout_fn)
+
+    q = add("whoami", help="which account the stored credentials belong to")
+    q.add_argument("-v", "--verbose", action="store_true",
+                   help="also the server, the full name and the group memberships")
+    q.set_defaults(func=do_whoami)
 
 
 def dispatch(args):

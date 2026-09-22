@@ -12,6 +12,7 @@ import types
 import zlib
 
 import pytest
+import requests
 
 from ihmtools import _common as common
 
@@ -384,3 +385,90 @@ def test_apply_salt_leaves_a_missing_optional_alone(tmp_path, capsys):
     assert image is None
     assert pathlib.Path(cif).read_bytes() != CIF
     assert "salted with" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------
+# identity -- a 403 is more often the wrong account than a missing grant
+# --------------------------------------------------------------------------
+
+CLIENT = {"id": "https://auth.globus.org/442a6439-c239",
+          "display_name": "someone@example.org",
+          "full_name": "Some One", "email": "someone@example.org"}
+
+
+class FakeClient:
+    """A deriva-py client object: the thing a bound method hangs off."""
+
+    def __init__(self, session=None, boom=False):
+        self.session = session or {"client": CLIENT, "attributes": []}
+        self.boom = boom
+        self.calls = 0
+
+    def get_authn_session(self):
+        self.calls += 1
+        if self.boom:
+            raise requests.ConnectionError("no route")
+        return types.SimpleNamespace(json=lambda: self.session)
+
+    def denied(self, *_a, **_kw):
+        response = requests.Response()
+        response.status_code = 403
+        response.url = "https://h/ermrest/catalog/1/entity/PDB:entry"
+        raise requests.HTTPError(response=response)
+
+
+def test_describe_names_the_account_and_the_uid():
+    assert common.describe(CLIENT) == "someone@example.org (442a6439-c239)"
+
+
+def test_describe_survives_an_unknown_identity():
+    assert common.describe(None) == "the stored credentials"
+
+
+def test_403_names_the_identity_and_the_url(monkeypatch):
+    """The failure that actually happens: logged in as the wrong account."""
+    monkeypatch.setattr(common, "IDENTITY", None)
+    monkeypatch.setattr(sys, "argv", ["ihmv"])
+    client = FakeClient()
+
+    with pytest.raises(SystemExit) as caught:
+        common.check(client.denied)
+    message = str(caught.value)
+
+    assert "someone@example.org (442a6439-c239)" in message
+    assert "ermrest/catalog/1/entity/PDB:entry" in message
+    assert "ihmv logout" in message, "the fix has to be in the message"
+
+
+def test_403_still_reports_when_the_identity_cannot_be_fetched(monkeypatch):
+    """Diagnosis is best effort; it must not replace the error with its own."""
+    monkeypatch.setattr(common, "IDENTITY", None)
+    client = FakeClient(boom=True)
+
+    with pytest.raises(SystemExit) as caught:
+        common.check(client.denied)
+    assert "the stored credentials" in str(caught.value)
+
+
+def test_identity_is_fetched_once(monkeypatch):
+    monkeypatch.setattr(common, "IDENTITY", None)
+    client = FakeClient()
+    assert common.identify(client) == CLIENT
+    assert common.identify(client) == CLIENT
+    assert client.calls == 1, "a cached identity must not be re-fetched"
+
+
+def test_whoami_puts_only_the_identity_on_stdout(monkeypatch, capsys):
+    """So `WHO=$(ihmv whoami)` works even with -v."""
+    session = {"client": CLIENT,
+               "attributes": [{"id": CLIENT["id"], "display_name": "someone@example.org"},
+                              {"id": "https://auth.globus.org/g1", "display_name": "pdb-writer"},
+                              {"id": "https://auth.globus.org/g2", "display_name": None}]}
+    monkeypatch.setattr(common, "connect", lambda: (FakeClient(session), None))
+    common.do_whoami(types.SimpleNamespace(verbose=True))
+
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "someone@example.org (442a6439-c239)"
+    # the identity appears among its own attributes; only real groups listed
+    assert "pdb-writer" in captured.err
+    assert "someone@example.org" not in captured.err.split("groups")[-1]

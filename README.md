@@ -15,6 +15,19 @@ so one login covers `ihmv`, `ihmdep` and the rest of the DERIVA client tools —
 and logging out of any of them logs out of all of them. Tokens written by an
 earlier `ihmtools` under `~/.config/ihmv/` are imported once, automatically.
 
+Because that store is shared and long-lived, it is easy to be logged in as an
+account you did not mean. `whoami` says which one, and `-v` adds the groups
+that decide what it can reach:
+
+```bash
+$ ihmv whoami
+you@example.org (442a6439-c239-4ff0-af85-d479bc676497)
+```
+
+Only the identity goes to stdout, so `WHO=$(ihmv whoami)` works either way.
+An access-denied message names the account too — a 403 is more often the wrong
+one than a missing grant.
+
 [deriva-py]: https://github.com/informatics-isi-edu/deriva-py
 
 While only the TestPyPI pre-release exists, the second index is not optional:
@@ -41,6 +54,7 @@ context to do it safely; these tools deliberately do not.
 ```
 ihmv login                           authenticate with Globus, once
 ihmv logout                          revoke those credentials and forget them
+ihmv whoami                          which account those credentials belong to
 ihmv upload model.cif                submit a structure for validation
 ihmv run model.cif                   upload and block until it finishes
 ihmv get_status                      list entries, newest first
@@ -55,6 +69,7 @@ ihmv delete 2Y0                      remove a record and its reports
 ```
 ihmdep login                                  authenticate with Globus, once
 ihmdep logout                                 revoke those credentials and forget them
+ihmdep whoami                                 which account those credentials belong to
 ihmdep upload model.cif --image model.png     deposit an entry
 ihmdep run model.cif                          deposit and block
 ihmdep get_status                             list entries, newest first
@@ -286,7 +301,7 @@ pip install -e '.[test]'
 pytest
 ```
 
-128 tests, offline — no network, no credentials, nothing written.
+134 tests, offline — no network, no credentials, nothing written.
 
 Two further tests drive a full round trip against the **dev** servers and are
 deselected unless asked for:

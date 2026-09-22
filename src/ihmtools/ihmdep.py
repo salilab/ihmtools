@@ -5,6 +5,7 @@ Built on deriva-py: ErmrestCatalog for records, HatracStore for files, and
 GlobusNativeLogin for authentication.
 
     ihmdep.py login                       authenticate with Globus (once)
+    ihmdep.py whoami                      which account you are logged in as
     ihmdep.py upload model.cif            deposit an entry
     ihmdep.py upload model.cif --image f.png    ...with a preview image
     ihmdep.py run model.cif               deposit and block until processing ends
