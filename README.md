@@ -279,31 +279,6 @@ before reporting it.
 
 [guide]: https://docs.google.com/document/d/1CM8-6PYqI0DvETeQEfoUpSFZ8BhLrvYnihLSK8ghVcI/edit
 
-## Notes
-
-`ihmtools/_common.py` holds everything the two front ends share: the deriva-py
-layer (`connect`, `check`, `get`, login/logout, Hatrac upload) and the CLI
-conventions (`emit_table`, `collect_rids`, the `--mode` flags, the exit and
-broken-pipe handling). `ihmv.py` and `ihmdep.py` are left with what actually
-differs — their tables, their columns, and their workflow rules.
-
-Those two modules used to be deliberately self-contained, each copyable and
-runnable on nothing but `requests`. Moving to deriva-py ended that, so the
-duplication it bought was no longer paying for anything.
-
-Uploads follow the catalog's own `tag:isrd.isi.edu,2017:asset` annotation for
-where files go and which extensions are accepted, which is what the web UI
-obeys. Resolving its handlebars `url_pattern` is the one piece deriva-py does
-not provide — it names `tag.asset` but has no handlebars engine, and only ever
-*writes* a `url_pattern`, never reads one.
-
-That is also why these tools do not use deriva-py's `DerivaUpload`, which is
-driven by the **`bulk-upload`** annotation instead. The two disagree: on dev
-`bulk-upload` omits the `dev/` path element the asset annotation carries, and
-on production the deployed `bulk-upload` config is older still
-(`entry/mmcif/{file_name}` rather than `entry/mmCIF/{md5}.{ext}`). Following
-the asset annotation puts our files exactly where the web UI puts them.
-
 ## Tests
 
 From the repository root:
