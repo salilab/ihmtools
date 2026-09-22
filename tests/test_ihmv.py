@@ -40,14 +40,16 @@ def test_status_code(states, expected):
 # --------------------------------------------------------------------------
 
 @pytest.mark.parametrize("mode_kwargs, expected", [
-    ({}, ("https", "data-dev.pdb-ihm.org", "199")),
+    # both tools default to production; only the live tests pin dev
+    ({}, ("https", "data.pdb-ihm.org", "101")),
     ({"mode": "dev"}, ("https", "data-dev.pdb-ihm.org", "199")),
     ({"mode": "production"}, ("https", "data.pdb-ihm.org", "101")),
     ({"mode": "production", "catalog": "7"}, ("https", "data.pdb-ihm.org", "7")),
-    ({"host": "example.org"}, ("https", "example.org", "199")),
+    # --host overrides only the host; the catalog stays the default mode's
+    ({"host": "example.org"}, ("https", "example.org", "101")),
     # deriva-py needs scheme and host apart, but --host still takes a whole URL
-    ({"host": "http://plain.example"}, ("http", "plain.example", "199")),
-    ({"host": "https://data.pdb-ihm.org/"}, ("https", "data.pdb-ihm.org", "199")),
+    ({"host": "http://plain.example"}, ("http", "plain.example", "101")),
+    ({"host": "https://data-dev.pdb-ihm.org/"}, ("https", "data-dev.pdb-ihm.org", "101")),
 ])
 def test_configure(monkeypatch, mode_kwargs, expected):
     monkeypatch.delenv("IHMV_HOST", raising=False)

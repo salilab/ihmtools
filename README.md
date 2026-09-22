@@ -53,8 +53,9 @@ TestPyPI carries its own stale copy of `requests` (2.5.4.1, from 2015), so
 without `--extra-index-url` pip installs that instead of the real one and every
 command dies with `module 'collections' has no attribute 'MutableMapping'`.
 
-`ihmv` defaults to the **dev** server and `ihmdep` to **production**; `--mode`
-switches either.
+Both tools default to the **production** server; `--mode dev` switches either
+one. The worked examples below spell `--mode dev` out wherever they deposit a
+real entry, and it is worth doing the same while you are finding your feet.
 
 `ihmdep` allows only the two transitions a depositor drives — `DRAFT -> DEPO`
 and `RECORD READY -> SUBMIT` — and deletes only `DRAFT` or `DEPO` entries.
@@ -171,8 +172,9 @@ and both validate against `mmcif_ihm.dic` + `mmcif_pdbx_v50.dic`.
 submit-and-wait loop is just:
 
 ```bash
-RID=$(ihmv upload model.cif)
-ihmv get_status --wait "$RID" && ihmv download "$RID" -o reports/
+RID=$(ihmv --mode dev upload model.cif)
+ihmv --mode dev get_status --wait "$RID" &&
+    ihmv --mode dev download "$RID" -o reports/
 ```
 
 `--wait` is a flag; `--interval SECS` changes the 60-second poll. They are

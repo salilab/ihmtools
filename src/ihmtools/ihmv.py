@@ -18,7 +18,7 @@ Listings are aligned on a terminal and tab-separated when piped, with a
 '#'-prefixed header, so columns containing spaces still split cleanly:
     ihmv.py get_status | awk -F'\t' '!/^#/ && $3=="Success" {print $1, $6}'
 
-Targets the dev server (catalog 199) unless --mode production / --host / --catalog
+Targets the production server (catalog 101) unless --mode dev / --host / --catalog
 says otherwise; those may be given before or after the subcommand.
 """
 
@@ -39,7 +39,7 @@ MODES = {
     "dev": ("data-dev.pdb-ihm.org", "199"),
     "production": ("data.pdb-ihm.org", "101"),
 }
-DEFAULT_MODE = "dev"
+DEFAULT_MODE = "production"
 
 # Where submitted files go and which extensions are allowed both come from this
 # annotation, which is what the web UI follows. The bulk-upload annotation that
