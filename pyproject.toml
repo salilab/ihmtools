@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ihmtools"
-version = "0.0.1a12"
+version = "0.0.1a13"
 description = "Command-line tools for the PDB-IHM validation and deposition systems"
 readme = "README.md"
 requires-python = ">=3.9"
