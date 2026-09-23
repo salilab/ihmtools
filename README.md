@@ -86,7 +86,7 @@ ihmdep whoami                                 which account those credentials be
 ihmdep upload model.cif --image model.png     deposit an entry
 ihmdep run model.cif                          deposit and block
 ihmdep get_status                             list entries, newest first
-ihmdep get_status 9-DXAM --workflow           RECORD READY, not just Success
+ihmdep get_status 9-DXAM                      workflow; process, plus an exit code
 ihmdep set_status 9-DXAM --to SUBMIT          DRAFT->DEPO, RECORD READY->SUBMIT
 ihmdep download 9-DXAM                        fetch its generated mmCIF and reports
 ihmdep delete 9-DXAM                          DRAFT or DEPO only
@@ -181,27 +181,33 @@ ihmv --mode dev get_status --wait "$RID" &&
 ### Which status?
 
 The deposition system keeps two: `Workflow_Status`, the stage an entry is at,
-and `Process_Status`, how the last backend run went. A single RID prints the
-second, because that is what the exit code reflects:
+and `Process_Status`, how the last backend run went. A single RID reports
+both, because neither answers the question on its own — `Success` is the same
+word after the `DEPO` run and after the post-`SUBMIT` one:
 
 ```bash
 $ ihmdep get_status 9-DXAM
-Success
+RECORD READY; Success
 ```
 
-But `Success` is the same word after the `DEPO` run and after the post-`SUBMIT`
-one, so it does not say which stage it belongs to. `--workflow` does, and the
-two combine:
+Name one and you get it alone, which is the form to substitute into a script:
 
 ```bash
+$ ihmdep get_status 9-DXAM --process
+Success
 $ ihmdep get_status 9-DXAM --workflow
 RECORD READY
 $ ihmdep get_status 9-DXAM --workflow --process
 RECORD READY	Success
 ```
 
-With several RIDs both columns are printed already; a flag narrows the table
-to the one you asked for.
+Asked for by name the output is tab-separated, like every other
+machine-readable listing here; the unasked form uses `; ` because it is meant
+to be read. With several RIDs both columns are printed already, and a flag
+narrows the table to the one you asked for.
+
+`ihmv` still prints a single word, because the validation catalog has only one
+status column to report.
 
 `--wait` is a flag; `--interval SECS` changes the 60-second poll. They are
 separate because a RID can be all digits, and an option that took an optional
@@ -316,7 +322,7 @@ pip install -e '.[test]'
 pytest
 ```
 
-153 tests, offline — no network, no credentials, nothing written.
+154 tests, offline — no network, no credentials, nothing written.
 
 Two further tests drive a full round trip against the **dev** servers and are
 deselected unless asked for:

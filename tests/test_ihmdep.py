@@ -281,21 +281,30 @@ READY = {"RID": "A", "Workflow_Status": "RECORD READY", "Process_Status": "Succe
 CREATED = {"RID": "B", "Workflow_Status": "mmCIF CREATED", "Process_Status": "Success"}
 
 
-def test_single_rid_still_prints_the_bare_process_word(monkeypatch, capsys):
-    """$(ihmdep get_status RID) is a documented contract; it must not change."""
-    assert status_out(monkeypatch, capsys, [READY]) == "Success"
+def test_single_rid_reports_both_by_default(monkeypatch, capsys):
+    """Requested in #1: "Success" alone cannot say whether it came from the
+    DEPO run or the post-SUBMIT one, so unasked we print the stage too."""
+    assert status_out(monkeypatch, capsys, [READY]) == "RECORD READY; Success"
+    assert status_out(monkeypatch, capsys, [CREATED]) == "mmCIF CREATED; Success"
 
 
-def test_single_rid_can_report_the_workflow_instead(monkeypatch, capsys):
-    """'Success' is the same word after DEPO and after SUBMIT -- only the
-    workflow state says which run it belonged to."""
+def test_single_rid_gives_a_bare_word_when_one_is_named(monkeypatch, capsys):
+    """The substitutable form scripts want is still one flag away."""
+    assert status_out(monkeypatch, capsys, [READY], "process") == "Success"
     assert status_out(monkeypatch, capsys, [READY], "workflow") == "RECORD READY"
-    assert status_out(monkeypatch, capsys, [CREATED], "workflow") == "mmCIF CREATED"
 
 
-def test_single_rid_can_report_both(monkeypatch, capsys):
+def test_single_rid_skips_a_status_the_server_left_empty(monkeypatch, capsys):
+    draft = {"RID": "C", "Workflow_Status": "DRAFT", "Process_Status": None}
+    assert status_out(monkeypatch, capsys, [draft]) == "DRAFT"
+
+
+def test_naming_both_gives_tabs_not_the_reading_form(monkeypatch, capsys):
+    """Asked for by name it is machine output, so it follows the tab
+    convention rather than the '; ' the default uses for a reader."""
     out = status_out(monkeypatch, capsys, [CREATED], "workflow", "process")
     assert out.split("\t") == ["mmCIF CREATED", "Success"]
+    assert "; " not in out
 
 
 def test_several_rids_report_both_by_default(monkeypatch, capsys):

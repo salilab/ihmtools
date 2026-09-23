@@ -10,7 +10,8 @@ GlobusNativeLogin for authentication.
     ihmdep.py upload model.cif --image f.png    ...with a preview image
     ihmdep.py run model.cif               deposit and block until processing ends
     ihmdep.py get_status                  list entries, newest first
-    ihmdep.py get_status 9-DXAM           one word + an exit code you can loop on
+    ihmdep.py get_status 9-DXAM           workflow; process, plus an exit code
+    ihmdep.py get_status 9-DXAM --process   just one of them, for a script
     ihmdep.py set_status 9-DXAM --to DEPO   move it to another workflow state
     ihmdep.py download 9-DXAM             fetch its generated mmCIF and reports
     ihmdep.py delete 9-DXAM               remove a pre-submit entry
@@ -270,16 +271,21 @@ def do_status(args):
         sys.exit(code)
 
     if len(rids) == 1:
-        # Bare word, no header, so `$(ihmdep.py get_status RID)` is directly
-        # usable. Unasked, that word stays Process_Status, as it always was.
         rid, row = results[0]
         if not row:
             print("%s: unknown RID" % rid, file=sys.stderr)
             sys.exit(code)
         if asked:
+            # Asked for by name: tab-separated, like every other
+            # machine-readable output here, so `cut -f1` works.
             print("\t".join(row[col] or "-" for _, _, col in asked))
         else:
-            print(state_of(row))
+            # Unasked, report both. "Success" on its own cannot say whether it
+            # came from the DEPO run or the post-SUBMIT one, and a reader
+            # wants the stage. A script that needs one value names it:
+            # `--process` is the bare word this used to print.
+            both = "; ".join(row[col] for _, _, col in STATUS_FIELDS if row[col])
+            print(both or "-")
         sys.exit(code)
 
     fields = asked or list(STATUS_FIELDS)
