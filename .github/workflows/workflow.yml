@@ -1,6 +1,6 @@
 name: test and publish
 
-# Publishing is wired to TestPyPI via trusted publishing, which matches on the
+# Publishing is wired to PyPI via trusted publishing, which matches on the
 # repository and on this file's name -- renaming it breaks authentication.
 on:
   push:
@@ -71,28 +71,12 @@ jobs:
           name: dist
           path: dist/
 
-  # Both indexes use trusted publishing, matched on this file's name.
-  testpypi:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write        # no secrets needed
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist/
-      - uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          repository-url: https://test.pypi.org/legacy/
-          # a version already tried on TestPyPI must not fail the release
-          skip-existing: true
-
+  # Trusted publishing, matched on this file's name.
   pypi:
     needs: build
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
+      id-token: write        # no secrets needed
     steps:
       - uses: actions/download-artifact@v4
         with:

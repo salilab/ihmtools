@@ -42,17 +42,6 @@ account as well — a 403 is more often the wrong one than a missing grant.
 
 [deriva-py]: https://github.com/informatics-isi-edu/deriva-py
 
-While only the TestPyPI pre-release exists, the second index is not optional:
-
-```bash
-pip install --index-url https://test.pypi.org/simple/ \
-            --extra-index-url https://pypi.org/simple/ ihmtools
-```
-
-TestPyPI carries its own stale copy of `requests` (2.5.4.1, from 2015), so
-without `--extra-index-url` pip installs that instead of the real one and every
-command dies with `module 'collections' has no attribute 'MutableMapping'`.
-
 Both tools default to the **production** server; `--mode dev` switches either
 one. The worked examples below spell `--mode dev` out wherever they deposit a
 real entry, and it is worth doing the same while you are finding your feet.
