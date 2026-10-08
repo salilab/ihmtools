@@ -148,7 +148,7 @@ def parse(argv):
     captured = {}
     real = {}
     for name in ("do_status", "do_run", "do_download", "do_upload",
-                 "do_set_status", "do_delete"):
+                 "do_set_status", "do_delete", "do_reupload"):
         real[name] = getattr(ihmdep, name)
         setattr(ihmdep, name, lambda a, _n=name: captured.update(func=_n, args=a))
     try:
@@ -247,6 +247,29 @@ MMCIF = "mmCIF"
 def test_download_selectors(flags, expected):
     args = types.SimpleNamespace(**{k: k in flags for k in ihmdep.SELECTORS})
     assert set(ihmdep.wanted_types(args)) == expected
+
+
+def test_reupload_takes_one_rid_and_one_file(monkeypatch):
+    """One entry per invocation: the batching lives in the caller's shell loop."""
+    argv = ["reupload", "9-ABCD", "fixed.cif"]
+    monkeypatch.setattr(sys, "argv", ["ihmdep"] + argv)
+    args = parse(argv)
+    assert args.rid == "9-ABCD" and args.file == "fixed.cif"
+    assert args.dry_run is False and args.yes is False
+
+
+def test_reupload_flags(monkeypatch):
+    argv = ["reupload", "9-ABCD", "fixed.cif", "--dry-run", "--yes"]
+    monkeypatch.setattr(sys, "argv", ["ihmdep"] + argv)
+    args = parse(argv)
+    assert args.dry_run is True and args.yes is True
+
+
+def test_reupload_refuses_a_rid_list(monkeypatch, capsys):
+    """add_rids would invite a batch; the command is deliberately single-entry."""
+    monkeypatch.setattr(sys, "argv", ["ihmdep", "reupload", "9-A", "9-B", "f.cif"])
+    with pytest.raises(SystemExit):
+        parse(["reupload", "9-A", "9-B", "f.cif"])
 
 
 @pytest.mark.parametrize("flag", ihmdep.SELECTORS)

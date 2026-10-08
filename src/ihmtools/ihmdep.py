@@ -28,6 +28,7 @@ import os
 import sys
 import time
 
+import requests
 from deriva.core import urlquote
 
 from . import _common as common
@@ -453,6 +454,159 @@ def do_download(args):
 
 
 # --------------------------------------------------------------------------
+# re-upload -- replacing the submitted file on an entry past deposition
+#
+# Admin-only, and narrow on purpose. The backend re-reads the submitted mmCIF
+# at SUBMIT, SUBMISSION COMPLETE and RELEASE READY, copying categories it
+# holds nowhere else straight out of it, so an unusable original strands the
+# entry at whichever of those stages it reached. Replacing the file fixes that
+# -- but the entry trigger's own recovery clause would send a changed file to
+# DEPO, which reloads the parsed content and cannot be re-run over content
+# that is already there. Hence one statement, and these guards.
+# --------------------------------------------------------------------------
+
+# Where to re-arm, keyed by the failure that stranded the entry: the inverse
+# of the backend's own error dispatch. All three re-enter through its export
+# step, which only reads the loaded content. DEPO is deliberately absent.
+REUPLOAD_STAGE = {
+    "Error: generating mmCIF file": "SUBMIT",
+    "Error: generating system files": "SUBMISSION COMPLETE",
+    "Error: releasing entry": "RELEASE READY",
+}
+DEPO_ERROR = "Error: processing uploaded mmCIF file"
+
+# Exit codes, so a shell loop can tell "skip this one" from "stop". 0/1/2/3
+# keep get_status's meanings; 4 is new and means every later entry will fail
+# the same way, which is the one case worth breaking the loop for.
+REUPLOAD_OK = 0
+REUPLOAD_REFUSED = 1
+REUPLOAD_NOOP = 2
+REUPLOAD_UNKNOWN = 3
+REUPLOAD_ENVIRONMENT = 4
+
+REUPLOAD_COLS = ("RID", "Workflow_Status", "Process_Status", "mmCIF_File_MD5",
+                 "mmCIF_File_Name", "Accession_Code")
+
+
+def reupload_entry(catalog, rid):
+    """One entry's row, with Manual_Processing when this account may see it.
+
+    Naming an admin-only column in a projection is answered with 409 "does not
+    exist" rather than 403, so the retry without it is how a non-admin account
+    gets a readable row at all -- and the missing key is what the verdict reads
+    as "wrong account".
+    """
+    cols = ",".join(REUPLOAD_COLS)
+    try:
+        rows = get(catalog, "/attribute/PDB:entry/RID=%s/%s,Manual_Processing"
+                            % (urlquote(rid), cols))
+    except requests.HTTPError as e:
+        if e.response is None or e.response.status_code != 409:
+            raise
+        rows = get(catalog, "/attribute/PDB:entry/RID=%s/%s" % (urlquote(rid), cols))
+    return rows[0] if rows else None
+
+
+def reupload_verdict(row, new_md5):
+    """(exit code, why, target Workflow_Status) for one entry.
+
+    Pure, so the guards can be read and tested without a catalog.
+
+    The order matters. A finished entry has the switch back at False *and* the
+    md5 already matching, so "already done" has to be settled before the switch
+    is judged -- otherwise re-running the same RID list reports every success
+    as a refusal and an interrupted loop cannot be resumed.
+    """
+    if row is None:
+        return REUPLOAD_UNKNOWN, "unknown RID", None
+    if row.get("mmCIF_File_MD5") == new_md5:
+        return REUPLOAD_NOOP, "already carries this file", None
+    if "Manual_Processing" not in row:
+        return (REUPLOAD_ENVIRONMENT,
+                "Manual_Processing is not visible to this account -- it is admin-only, "
+                "and without it this command cannot stage the change safely", None)
+    if row["Manual_Processing"] is not True:
+        return (REUPLOAD_REFUSED,
+                "Manual_Processing is %r, not True: the entry is not parked, so the "
+                "backend may already have it" % (row["Manual_Processing"],), None)
+
+    state = row.get("Process_Status")
+    if state == DEPO_ERROR:
+        return (REUPLOAD_REFUSED,
+                "%r is retried at DEPO, which reloads the parsed content and cannot "
+                "be re-run over an entry that already holds it" % (state,), None)
+    stage = REUPLOAD_STAGE.get(state)
+    if stage is None:
+        return (REUPLOAD_REFUSED,
+                "Process_Status is %r; only a failed export can be re-armed (%s)"
+                % (state, ", ".join(sorted(REUPLOAD_STAGE))), None)
+    return REUPLOAD_OK, None, stage
+
+
+def reupload_row(rid, asset, stage):
+    """The single atomic PUT: swap the file, unpark the entry, re-arm it.
+
+    One statement on purpose. The trigger's recovery clause tests
+    *NEW*.Workflow_Status, so leaving the status at ERROR in this same write is
+    exactly what reroutes the entry to DEPO. Last_mmCIF_File_MD5 is absent
+    deliberately -- the trigger moves the old md5 there itself, and writing it
+    from here would overwrite the server's own bookkeeping.
+    """
+    return {"RID": rid,
+            "mmCIF_File_URL": asset["URL"], "mmCIF_File_Name": asset["Name"],
+            "mmCIF_File_MD5": asset["MD5"], "mmCIF_File_Bytes": asset["Bytes"],
+            "Manual_Processing": False, "Workflow_Status": stage}
+
+
+def do_reupload(args):
+    """Replace one entry's submitted mmCIF and hand it back to the backend."""
+    if not os.path.isfile(args.file):
+        sys.exit("%s: no such file" % args.file)
+
+    catalog, store = connect()
+    row = reupload_entry(catalog, args.rid)
+    asset = get(catalog, asset_path("mmCIF_File_URL"))
+    # Hash before anything is written: the no-op verdict needs the new md5, and
+    # a file this catalog would refuse should be refused on its own merits.
+    prep = prepare_asset(args.file, asset, MMCIF_EXT)
+
+    code, why, stage = reupload_verdict(row, prep["md5"])
+    if code != REUPLOAD_OK:
+        print("%s: %s" % (args.rid, why), file=sys.stderr)
+        sys.exit(code)
+
+    uid = whoami(catalog).rsplit("/", 1)[-1]
+    print("  %s  %s / %s -> %s, Manual_Processing false"
+          % (args.rid, row["Workflow_Status"], row["Process_Status"], stage), file=sys.stderr)
+    print("  file    %s (%d bytes, md5 %s), replacing md5 %s"
+          % (prep["name"], prep["size"], prep["md5"], row["mmCIF_File_MD5"]), file=sys.stderr)
+    print("  hatrac  %s" % common.hatrac_target(asset, uid, prep["md5"], prep["ext"]),
+          file=sys.stderr)
+
+    if args.dry_run:
+        print("dry run: nothing written", file=sys.stderr)
+        return
+
+    if not args.yes and not confirm("Replace the file on %s? [y/N] " % args.rid):
+        sys.exit("aborted")
+
+    # Hatrac first: it is outside the transaction below but idempotent, so a
+    # retry after a failed PUT costs nothing.
+    uploaded = put_asset(store, prep, asset, uid)
+    payload = reupload_row(args.rid, uploaded, stage)
+    cols = [c for c in payload if c != "RID"]
+    # One statement. Splitting the file from the status lets the trigger see
+    # NEW.Workflow_Status still at ERROR and reroute the entry to DEPO.
+    updated = check(catalog.put, "/attributegroup/PDB:entry/RID;" + ",".join(cols),
+                    json=[payload]).json()
+    # An attributegroup PUT whose key matches nothing answers 200 with an empty
+    # list, so the status code alone would report a typo'd RID as success.
+    if len(updated) != 1:
+        sys.exit("%s: the catalog matched no row; nothing was changed" % args.rid)
+    print(args.rid)
+
+
+# --------------------------------------------------------------------------
 
 def configure(args):
     return common.configure(args, MODES, "IHMDEP")
@@ -512,6 +666,15 @@ def main():
     add_rids(q)
     q.add_argument("-y", "--yes", action="store_true", help="skip the confirmation prompt")
     q.set_defaults(func=do_delete)
+
+    q = add("reupload", help="admin: replace one entry's submitted mmCIF and re-arm "
+                             "the stage that failed on it (needs Manual_Processing)")
+    q.add_argument("rid", help="the entry to repair; one per invocation, loop in the shell")
+    q.add_argument("file", help="the corrected mmCIF to put in its place")
+    q.add_argument("-n", "--dry-run", action="store_true",
+                   help="run every guard and print the planned write, changing nothing")
+    q.add_argument("-y", "--yes", action="store_true", help="skip the confirmation prompt")
+    q.set_defaults(func=do_reupload)
 
     q = add("download", help="fetch entries' generated files")
     add_rids(q)
