@@ -496,14 +496,16 @@ def reupload_entry(catalog, rid):
     gets a readable row at all -- and the missing key is what the verdict reads
     as "wrong account".
     """
-    cols = ",".join(REUPLOAD_COLS)
+    base = "/attribute/PDB:entry/RID=%s/%s" % (urlquote(rid), ",".join(REUPLOAD_COLS))
     try:
-        rows = get(catalog, "/attribute/PDB:entry/RID=%s/%s,Manual_Processing"
-                            % (urlquote(rid), cols))
+        # Deliberately not through get(): it hands the call to check(), which
+        # exits on any HTTPError, so this 409 would never reach the retry.
+        rows = catalog.get(base + ",Manual_Processing").json()
     except requests.HTTPError as e:
-        if e.response is None or e.response.status_code != 409:
-            raise
-        rows = get(catalog, "/attribute/PDB:entry/RID=%s/%s" % (urlquote(rid), cols))
+        r = e.response
+        if r is None or r.status_code != 409 or "Manual_Processing" not in r.text:
+            common.fail(e, catalog.get)
+        rows = get(catalog, base)
     return rows[0] if rows else None
 
 

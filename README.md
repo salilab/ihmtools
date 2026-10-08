@@ -79,7 +79,30 @@ ihmdep get_status 9-DXAM                      workflow; process, plus an exit co
 ihmdep set_status 9-DXAM --to SUBMIT          DRAFT->DEPO, RECORD READY->SUBMIT
 ihmdep download 9-DXAM                        fetch its generated mmCIF and reports
 ihmdep delete 9-DXAM                          DRAFT or DEPO only
+ihmdep reupload 9-DXAM fixed.cif              admin only; see below
 ```
+
+### `reupload` — admin only
+
+Replaces the submitted mmCIF on an entry that has already left deposition and
+re-arms the stage that failed on it. It needs an account that can see
+`Manual_Processing`; without that it refuses rather than doing half the job,
+and a depositor account has no use for it.
+
+One entry per invocation, so a batch is a shell loop. The exit code says what
+the loop should do next:
+
+| code | meaning | loop |
+|---|---|---|
+| 0 | replaced and re-armed | continue |
+| 1 | refused — the entry is not in a state this can repair | continue |
+| 2 | nothing to do — the entry already carries this file | continue |
+| 3 | unknown RID | continue |
+| 4 | wrong account, or no credentials | **stop** |
+
+`--dry-run` runs every check and prints the planned write without making it.
+Code 2 is what makes an interrupted run safe to repeat: entries already done
+fall straight through.
 
 ## Preparing an entry from raw files
 

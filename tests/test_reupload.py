@@ -6,6 +6,7 @@ changed file into the insert-only loader.
 """
 
 import pytest
+import requests
 
 from ihmtools import ihmdep
 
@@ -186,23 +187,50 @@ def args_for(cat, **kw):
     return _t.SimpleNamespace(**base)
 
 
-def test_invisible_column_falls_back_to_a_row_without_it(monkeypatch):
-    """Projecting an admin-only column 409s, which must not look like a dead catalog."""
-    import requests
-    calls = []
+class Conflicting:
+    """A catalog that rejects the admin-only column exactly as ERMrest does.
 
-    def fake_get(_cat, path):
-        calls.append(path)
+    Patched at the catalog, not at _common.get: get() routes errors through
+    check(), which turns an HTTPError into sys.exit before any caller can
+    handle it. Stubbing get() instead would assert on the stub.
+    """
+
+    def __init__(self):
+        self.paths = []
+
+    def get(self, path):
+        self.paths.append(path)
         if "Manual_Processing" in path:
             r = requests.Response()
             r.status_code = 409
+            r.reason = "CONFLICT"
+            r._content = (b"Request conflicts with state of server. Detail: Requested "
+                          b"column Manual_Processing does not exist in table entry.")
             raise requests.HTTPError(response=r)
-        return [{"RID": "9-ABCD", "Process_Status": "Error: generating mmCIF file"}]
+        return FakeResponse([{"RID": "9-ABCD",
+                              "Process_Status": "Error: generating mmCIF file"}])
 
-    monkeypatch.setattr(ihmdep, "get", fake_get)
-    row = ihmdep.reupload_entry("cat", "9-ABCD")
+
+def test_invisible_column_falls_back_to_a_row_without_it():
+    """Projecting an admin-only column 409s, which must not look like a dead catalog."""
+    cat = Conflicting()
+    row = ihmdep.reupload_entry(cat, "9-ABCD")
     assert "Manual_Processing" not in row
-    assert len(calls) == 2 and "Manual_Processing" in calls[0]
+    assert len(cat.paths) == 2 and "Manual_Processing" in cat.paths[0]
+
+
+def test_a_real_conflict_still_reaches_the_user():
+    """Only the missing-column 409 is swallowed; a 500 must not be."""
+    class Broken(Conflicting):
+        def get(self, path):
+            r = requests.Response()
+            r.status_code = 500
+            r.reason = "INTERNAL SERVER ERROR"
+            r._content = b"boom"
+            raise requests.HTTPError(response=r)
+
+    with pytest.raises(SystemExit):
+        ihmdep.reupload_entry(Broken(), "9-ABCD")
 
 
 def test_a_refusal_writes_nothing_and_exits_with_its_code(wired, monkeypatch, capsys):

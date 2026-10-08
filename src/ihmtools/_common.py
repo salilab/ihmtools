@@ -194,24 +194,34 @@ def check(call, *args, **kwargs):
     try:
         return call(*args, **kwargs)
     except requests.HTTPError as e:
-        r = e.response
-        if r is None:
-            raise
-        if r.status_code == 401:
-            raise NeedLogin("server rejected the token")
-        if r.status_code == 403:
-            # Authentication worked, so this is a permission -- but whose, and
-            # on what? It is the catalog for an ERMrest path and the object for
-            # a Hatrac one, and in practice it is most often simply the wrong
-            # account, so name both the identity and the URL.
-            tool = os.path.basename(sys.argv[0]) or "ihmv"
-            sys.exit("Access denied: %s\n"
-                     "Authenticated as %s, which is not permitted here.\n"
-                     "Wrong account? %s logout, then %s login.\n"
-                     "Otherwise request catalog membership: %s"
-                     % (r.url, describe(identify(getattr(call, "__self__", None))),
-                        tool, tool, GROUP_SIGNUP))
-        sys.exit("%s %s\n%s" % (r.status_code, r.reason, r.text[:400]))
+        fail(e, call)
+
+
+def fail(e, call=None):
+    """Turn one HTTPError into our own exit. Never returns.
+
+    Split out of check() so a caller that has to inspect a specific status
+    itself -- and so cannot hand the request to check() -- still reports every
+    other failure identically.
+    """
+    r = e.response
+    if r is None:
+        raise e
+    if r.status_code == 401:
+        raise NeedLogin("server rejected the token")
+    if r.status_code == 403:
+        # Authentication worked, so this is a permission -- but whose, and on
+        # what? It is the catalog for an ERMrest path and the object for a
+        # Hatrac one, and in practice it is most often simply the wrong
+        # account, so name both the identity and the URL.
+        tool = os.path.basename(sys.argv[0]) or "ihmv"
+        sys.exit("Access denied: %s\n"
+                 "Authenticated as %s, which is not permitted here.\n"
+                 "Wrong account? %s logout, then %s login.\n"
+                 "Otherwise request catalog membership: %s"
+                 % (r.url, describe(identify(getattr(call, "__self__", None))),
+                    tool, tool, GROUP_SIGNUP))
+    sys.exit("%s %s\n%s" % (r.status_code, r.reason, r.text[:400]))
 
 
 def get(catalog, path):
