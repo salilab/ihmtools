@@ -13,10 +13,13 @@ Everything that differs here follows from the model being coarse-grained:
     structure and the model is taken from _ihm_sphere_obj_site directly
   * the representation is multi-scale: rigid by-residue segments for the
     regions built from known structures, flexible multi-residue beads elsewhere
-  * a crosslink onto a coarse bead cannot name a residue, so restraints come
-    in two granularities and restraints.csv says which
+  * a multi-residue bead has no single-residue coordinate, so restraints use
+    granularity "by-residue" only when both endpoints are 1-residue spheres and
+    "by-feature" whenever either endpoint is a multi-residue bead
 
-This is a worked example for one entry, not a general converter.
+This is a worked example for one entry, not a general converter. Values tied to
+9A8W (title, linker, distance bound, archive accessions, protocol and ensemble
+numbers) are marked "CHANGE FOR YOUR ENTRY" below.
 """
 
 import csv
@@ -42,15 +45,22 @@ CROSSLINKS = os.path.join(DATA, "crosslinks.csv")
 RESTRAINTS = os.path.join(DATA, "restraints.csv")
 OUTPUT = os.path.join(DATA, "assembled.cif")
 
-# SDA is a short crosslinker; 22 A is the bound the study scored against, and
-# psi/sigma are the Bayesian nuisance parameters IMP fitted alongside it.
+# CHANGE FOR YOUR ENTRY: SDA upper-bound distance in Angstroms
+# (_ihm_cross_link_restraint.distance_threshold) and IMP's Bayesian nuisance
+# parameters (_ihm_cross_link_restraint.psi, .sigma_1, .sigma_2).
 CROSSLINK_DISTANCE = 22.0
 CROSSLINK_PSI = 0.25
 CROSSLINK_SIGMA = 2.0
 
 # --------------------------------------------------------------------------
-# Read the model. gemmi.read_structure() is no use here -- _atom_site is empty
-# -- so read the categories directly.
+# Read data/model.cif. gemmi.read_structure() is no use here -- _atom_site is
+# empty -- so read the mmCIF categories directly:
+#   _entity          (id, pdbx_description -- must match crosslinks.csv names)
+#   _entity_poly     (entity_id, type -- polypeptide(L) vs deoxyribonucleotide)
+#   _entity_poly_seq (entity_id, mon_id, num -- 1-based entity seq_id)
+#   _struct_asym     (id, entity_id -- chain IDs A..G used in restraints.csv)
+#   _ihm_sphere_obj_site (asym_id, seq_id_begin..end, Cartn_x/y/z,
+#                         object_radius)
 # --------------------------------------------------------------------------
 
 block = gemmi.cif.read(MODEL).sole_block()
@@ -73,7 +83,12 @@ poly_types = {r["entity_id"]: r["type"] for r in category("_entity_poly")}
 
 # --------------------------------------------------------------------------
 # One Entity per sequence, one AsymUnit per chain. Every entity here is
-# polymeric -- protein or DNA -- so there is no ligand case to handle.
+# polymeric -- protein or DNA -- so there is no ligand case to handle (see
+# 9A9W/assemble.py for non-polymer ligands).
+#
+# Writes: _entity, _entity_poly, _entity_poly_seq, _chem_comp, _struct_asym,
+# _pdbx_poly_seq_scheme, _entry, _struct, _ihm_struct_assembly, and
+# _ihm_struct_assembly_details.
 # --------------------------------------------------------------------------
 
 entities = {}
@@ -97,6 +112,10 @@ for row in category("_struct_asym"):
 by_description = {e.description: e for e in entities.values()}
 by_chain = {a.id: a for a in asyms.values()}
 
+# CHANGE FOR YOUR ENTRY: system title, plus system.authors (_audit_author; see
+# 9A9W/assemble.py), system.citations (_citation), system.software (_software),
+# and entity.references (ihm.reference.UniProtSequence -> _struct_ref; see
+# examples/G_1000003/*.cif for complete examples).
 system = ihm.System(title="Integrative structure of human SNAPc-DNA")
 system.entities.extend(entities.values())
 system.asym_units.extend(asyms.values())
@@ -106,10 +125,20 @@ assembly = ihm.Assembly(list(asyms.values()), name="Modeled assembly")
 # --------------------------------------------------------------------------
 # The spheres, and the representation they imply.
 #
-# A one-residue sphere is a residue-level bead: those regions were built from
-# known structures and sampled as rigid bodies. A sphere spanning several
-# residues is a coarse bead standing in for a region with no structure, left
-# flexible. Reading the spans back out reconstructs both kinds of segment.
+# Each row of _ihm_sphere_obj_site gives asym_id (chain A..G), 1-based
+# inclusive entity seq_id_begin..seq_id_end, Cartn_x/y/z (Angstroms) and
+# object_radius (Angstroms). Unmodeled regions (here subunit 4 / chain E
+# residues 1..40, an N-terminal tag) have no spheres.
+#
+# A one-residue sphere (begin == end) is a residue-level bead from a known
+# structure, sampled as a rigid body (ResidueSegment). A multi-residue sphere
+# (begin < end) is a flexible coarse bead for a region without structure
+# (FeatureSegment, count=1 sphere per segment).
+#
+# Writes: _ihm_entity_poly_segment, _ihm_model_representation, and
+# _ihm_model_representation_details. (To also populate
+# _ihm_starting_model_details, pass starting_model=ihm.startmodel.StartingModel
+# to each template-derived ResidueSegment.)
 # --------------------------------------------------------------------------
 
 spheres = []
@@ -143,27 +172,58 @@ representation = ihm.representation.Representation([
     for asym, begin, end, size in segments])
 
 # --------------------------------------------------------------------------
-# The data 9A8W was built from. The crosslinking MS is fully deposited in
-# PRIDE, which is what lets a validation report check the restraints against
-# the primary data rather than taking the entry's word for them.
+# CHANGE FOR YOUR ENTRY: experimental datasets and starting-model archives.
+#
+# Archive Location classes (PRIDELocation, EMDBLocation, ModelArchiveLocation,
+# PDBLocation) set _ihm_dataset_list.database_hosted = YES and write
+# _ihm_dataset_related_db_reference. The crosslinking MS is deposited in PRIDE
+# so validation can check restraints against primary data.
 # --------------------------------------------------------------------------
 
 crosslink_data = ihm.dataset.CXMSDataset(ihm.location.PRIDELocation("PXD053341"))
 em_data = ihm.dataset.EMDensityDataset(ihm.location.EMDBLocation("EMD-50730"))
-system.orphan_datasets.extend([
-    crosslink_data, em_data,
-    ihm.dataset.DeNovoModelDataset(ihm.location.ModelArchiveLocation("ma-pgtjz")),
-    ihm.dataset.PDBDataset(ihm.location.PDBLocation("9FSO")),
-    ihm.dataset.PDBDataset(ihm.location.PDBLocation("7ZX8")),
-    ihm.dataset.PDBDataset(ihm.location.PDBLocation("7XUR")),
-])
+alphafold_data = ihm.dataset.DeNovoModelDataset(
+    ihm.location.ModelArchiveLocation("ma-pgtjz"))
+pdb_9fso = ihm.dataset.PDBDataset(ihm.location.PDBLocation("9FSO"))
+pdb_7zx8 = ihm.dataset.PDBDataset(ihm.location.PDBLocation("7ZX8"))
+pdb_7xur = ihm.dataset.PDBDataset(ihm.location.PDBLocation("7XUR"))
+
+# python-ihm writes the datasets that something in the system cites: a
+# restraint, a starting model, or a dataset group. Here the sampling step
+# below cites this group, which is how the template models -- used by nothing
+# else in this script -- get into the file. Nothing has to go in
+# system.orphan_datasets, which is meant for data that nothing cites.
+input_data = ihm.dataset.DatasetGroup(
+    [crosslink_data, em_data, alphafold_data, pdb_9fso, pdb_7zx8, pdb_7xur])
 
 # --------------------------------------------------------------------------
-# Crosslinks. As in 9A9W the measurements and the modelled pairings are
-# separate files, but here a pairing also says which granularity it used:
-# a bead covering ten residues cannot be restrained at one of them.
+# Crosslinks and the 3DEM restraint.
+#
+# data/crosslinks.csv -> _ihm_cross_link_list: 268 identified crosslinks
+# (unique residue pairs; id,protein1,residue1,protein2,residue2,linker): 186
+# intra-protein, 81 inter-protein, 1 homomeric self-link. All entities are
+# single-copy, so there is no intra-/inter-molecular ambiguity and each pair
+# maps to one chain pair.
+#   * protein1/protein2 = _entity.pdbx_description; residue1/residue2 =
+#     entity seq_id (_entity_poly_seq.num, counting subunit 4's 40-residue
+#     N-terminal tag), not author numbering.
+#   * The linker column is not read; the reagent is set once per
+#     CrossLinkRestraint (SDA -> _ihm_chemical_component_descriptor).
+#
+# data/restraints.csv -> _ihm_cross_link_restraint: 251 chain-resolved
+# restraints (crosslink_id,chain1,chain2,granularity; 176 intra-, 75
+# inter-molecular). Not restrained: 16 crosslinks with an endpoint in the
+# unmodeled tag (chain E, seq_id 1-40), and self-link 161 (subunit 1
+# K302-K302), which implies an inter-molecular contact that a single-copy
+# model cannot represent.
+#   * chain1/chain2 = _struct_asym.id.
+#   * granularity -> model_granularity, set by the representation: by-residue
+#     if both endpoints are in residue-level beads (ResidueCrossLink, 127),
+#     by-feature if either is in a multi-residue bead (FeatureCrossLink, 124).
 # --------------------------------------------------------------------------
 
+# CHANGE FOR YOUR ENTRY: crosslinking reagent (ihm.cross_linkers.sda would
+# also record its SMILES and InChI).
 crosslink_restraint = ihm.restraint.CrossLinkRestraint(
     dataset=crosslink_data, linker=ihm.ChemDescriptor("SDA"))
 
@@ -189,18 +249,23 @@ for row in csv.DictReader(open(RESTRAINTS)):
         crosslink_restraint.cross_links.append(
             ihm.restraint.FeatureCrossLink(**common))
 
+# CHANGE FOR YOUR ENTRY: 3DEM fitting method (see em_restraint.fits below).
 em_restraint = ihm.restraint.EM3DRestraint(
     dataset=em_data, assembly=assembly,
     fitting_method="Gaussian mixture models")
 system.restraints.extend([crosslink_restraint, em_restraint])
 
 # --------------------------------------------------------------------------
-# How the model was sampled: replica-exchange Monte Carlo, then clustered.
+# CHANGE FOR YOUR ENTRY: sampling protocol and clustering post-processing.
+#
+# Writes: _ihm_modeling_protocol, _ihm_modeling_protocol_details, and
+# _ihm_modeling_post_process. (Pass multi_scale=True to Step if
+# _ihm_modeling_protocol_details.multi_scale_flag should be YES.)
 # --------------------------------------------------------------------------
 
 protocol = ihm.protocol.Protocol(name="Modeling")
 protocol.steps.append(ihm.protocol.Step(
-    assembly=assembly, dataset_group=None, name="Sampling",
+    assembly=assembly, dataset_group=input_data, name="Sampling",
     method="Replica exchange monte carlo",
     num_models_begin=0, num_models_end=320000))
 
@@ -208,11 +273,14 @@ analysis = ihm.analysis.Analysis()
 analysis.steps.append(ihm.analysis.ClusterStep(
     feature="RMSD", num_models_begin=320000, num_models_end=8260))
 protocol.analyses.append(analysis)
-system.orphan_protocols.append(protocol)
+# The model below cites this protocol, and that is what writes it.
 
 
 class Model(ihm.model.Model):
-    """A sphere model: get_spheres() rather than get_atoms()."""
+    """A sphere model: get_spheres() rather than get_atoms().
+
+    Writes _ihm_sphere_obj_site (1663 rows) and _ihm_model_list.
+    """
 
     def get_spheres(self):
         for chain, begin, end, x, y, z, radius in spheres:
@@ -223,12 +291,17 @@ class Model(ihm.model.Model):
 
 model = Model(assembly=assembly, protocol=protocol,
               representation=representation, name="Best scoring model")
+# Required: _ihm_3dem_restraint is written only for models in
+# em_restraint.fits (one row per fitted model).
 em_restraint.fits[model] = ihm.restraint.EM3DRestraintFit()
 
+# Writes _ihm_model_group and _ihm_model_group_link.
 group = ihm.model.ModelGroup([model], name="Cluster 0")
 system.state_groups.append(ihm.model.StateGroup([ihm.model.State([group])]))
 
-# The deposited model represents a cluster of 5766 sampled models.
+# CHANGE FOR YOUR ENTRY: ensemble size and clustering method.
+# Writes _ihm_ensemble_info and sets
+# _ihm_modeling_protocol_details.ensemble_flag = YES.
 system.ensembles.append(ihm.model.Ensemble(
     model_group=group, num_models=5766, name="Cluster 0",
     clustering_method="Density based threshold-clustering",
@@ -238,6 +311,9 @@ with open(OUTPUT, "w") as fh:
     ihm.dumper.write(fh, [system])
 print("wrote %s" % OUTPUT)
 
+# Read back with python-ihm as a quick local check. Before depositing with
+# ihmdep, also validate against the PDBx + IHM dictionaries or run:
+#   ihmv --mode dev run data/assembled.cif
 with open(OUTPUT) as fh:
     check, = ihm.reader.read(fh)
 crosslinks = check.restraints[0]

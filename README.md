@@ -73,6 +73,7 @@ ihmdep login                                  authenticate with Globus, once
 ihmdep logout                                 revoke those credentials and forget them
 ihmdep whoami                                 which account those credentials belong to
 ihmdep upload model.cif --image model.png     deposit an entry
+ihmdep update 9-DXAM --image model.png        add an image to an entry
 ihmdep run model.cif                          deposit and block
 ihmdep get_status                             list entries, newest first
 ihmdep get_status 9-DXAM                      workflow; process, plus an exit code
@@ -106,15 +107,22 @@ fall straight through.
 
 ## Preparing an entry from raw files
 
-`examples/` builds a depositable IHM mmCIF out of what an experimenter
-actually has. There are two, covering the two kinds of integrative model:
+PDB-IHM accepts a file from any software, as long as it is valid IHMCIF
+(PDBx/mmCIF with the IHM extension). `examples/` shows one way to make one:
+two scripts that build a depositable entry out of what an experimenter
+actually has, one for each kind of integrative model:
 
 | | |
 |---|---|
 | `examples/9A9W/` | **atomic** — USP7 bound to a nucleosome/p53 complex, 51729 atoms, DSSO crosslinks and a 3DEM map |
 | `examples/9A8W/` | **coarse-grained** — human SNAPc-DNA from IMP, 1663 spheres, SDA crosslinks and a 3DEM map |
 
-The examples need two libraries **`ihmtools` does not depend on** and
+A third directory, `examples/G_1000003/`, holds finished entries for
+depositing several at once (see [Scripting](#scripting)), and
+[`examples/README.md`](examples/README.md) points to other code that writes
+IHMCIF.
+
+The two scripts need two libraries **`ihmtools` does not depend on** and
 `pip install ihmtools` will not bring in — [gemmi][] for reading coordinates
 and [python-ihm][] for writing the entry:
 
@@ -143,7 +151,7 @@ ihmdep upload data/assembled.cif --image data/9A8W.png
 
 Each `assemble.py` reads the files in its own `data/` and derives everything
 else with python-ihm: the entities and their sequences, one asym unit per
-chain copy, the representation, the datasets, both restraints, the modelling
+chain copy, the representation, the datasets, both restraints, the modeling
 protocol, and the model itself.
 
 | | 9A9W | 9A8W |
@@ -162,7 +170,7 @@ pipeline.
 
 **Why the crosslinks are two files.** mmCIF keeps them apart and so does the
 science. `crosslinks.csv` is what the experiment measured — protein and
-residue, with no idea which copy. `restraints.csv` is what the modelling
+residue, with no idea which copy. `restraints.csv` is what the modeling
 actually restrained: the chain pair, for the subset used. For 9A9W those are
 90 and 51. Of the 40 measurements left unrestrained, 25 have a residue that
 isn't in the coordinates — it fell in a disordered gap, so there is no atom to
@@ -316,7 +324,7 @@ Its last section documents the supported **bulk upload** route, which
 | layout | files must sit in `~/…/deriva/{globus_id}/entry/` | any path |
 | pairing | `AB-AT.cif` and `AB-AT.png` must share a basename | `--image` names the file |
 | login | `deriva-globus-auth-utils login --refresh` | `ihmdep login` |
-| images | `.png` or `.jpg` | `.png` only |
+| images | `.png`, `.jpg` or `.jpeg` | the same |
 | re-upload | same name or md5 is an error | reports the existing RID and stops |
 
 Use whichever suits you. The official route is the one the PDB-IHM team

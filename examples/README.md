@@ -9,6 +9,25 @@ this covers what is worth knowing if you adapt the code.
 | [`9A8W/`](9A8W) | a **coarse-grained** IMP structure: 1663 spheres, SDA crosslinks, a 3DEM map |
 | [`G_1000003/`](G_1000003) | three entries of one collection, for the batch deposit loop |
 
+These are one way to make a deposition file, not the only one. PDB-IHM takes
+any file that complies with the PDBx and IHM dictionaries ([IHMCIF][]),
+however it was written; gemmi and python-ihm are only what these scripts
+happen to use. Other code that writes IHMCIF:
+
+- the [IMP deposition tutorial][imp-tutorial], which captures an IMP/PMI
+  modeling script as it runs (`ProtocolOutput`) and adds the rest with
+  python-ihm;
+- [nup133][], a python-ihm script with helper modules that collects a study's
+  SAXS profiles, 2DEM class averages, crosslinks and comparative models —
+  the tutorial's own example of using python-ihm directly;
+- [python-ihm's examples][ihm-examples], short scripts that each show one part
+  of the library.
+
+[IHMCIF]: https://github.com/ihmwg/IHMCIF
+[imp-tutorial]: https://integrativemodeling.org/tutorials/deposition/
+[nup133]: https://github.com/integrativemodeling/nup133/tree/main/outputs_foxs_ensemble_new/pdb-dev
+[ihm-examples]: https://github.com/ihmwg/python-ihm/tree/main/examples
+
 These scripts need [gemmi][] and [python-ihm][], which are **not** dependencies
 of `ihmtools` — installing the package does not provide them:
 
@@ -24,6 +43,11 @@ pip install gemmi ihm
 
 Each script reads `data/` beside it and writes `data/assembled.cif`. One entry
 each, deliberately — these are worked examples, not general converters.
+
+Each directory has its own README that walks through the example step by
+step — inputs, the code for each IHMCIF category, the rows it writes, checks
+before upload, and what a real deposition adds: [`9A9W`](9A9W/README.md),
+[`9A8W`](9A8W/README.md), [`G_1000003`](G_1000003/README.md).
 
 ## The two assemble scripts
 
@@ -62,5 +86,5 @@ against `mmcif_ihm.dic` + `mmcif_pdbx_v50.dic`.
   returns zero chains rather than failing, so a script written for atoms
   silently produces nothing.
 
-Needs current gemmi and python-ihm (tested with gemmi 0.7.5 / ihm 2.11);
+Needs current gemmi and python-ihm (tested with gemmi 0.7.5 / ihm 2.12);
 gemmi 0.5.8 groups entities differently and the build fails.

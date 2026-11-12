@@ -112,8 +112,25 @@ def test_only_two_transitions_are_settable():
 
 
 def test_image_extension_restriction_is_ours():
-    """The Image_File_URL annotation carries no filename_ext_filter."""
-    assert ihmdep.IMAGE_EXT == (".png", ".PNG")
+    """The Image_File_URL annotation carries no filename_ext_filter, so the
+    list is ours: what the official uploader takes."""
+    assert {e.lower() for e in ihmdep.IMAGE_EXT} == {".png", ".jpg", ".jpeg"}
+
+
+@pytest.mark.parametrize("name, ok", [
+    ("model.png", True), ("model.jpg", True), ("model.jpeg", True),
+    ("MODEL.PNG", True), ("model.JPG", True),
+    ("model.gif", False), ("model.tiff", False), ("model", False),
+])
+def test_image_types(tmp_path, name, ok):
+    path = tmp_path / name
+    path.write_bytes(b"image")
+    no_filter = {"url_pattern": "/hatrac/x", "md5": "Image_File_MD5"}
+    if ok:
+        assert common.prepare_asset(str(path), no_filter, ihmdep.IMAGE_EXT)["name"] == name
+    else:
+        with pytest.raises(SystemExit):
+            common.prepare_asset(str(path), no_filter, ihmdep.IMAGE_EXT)
 
 
 # --------------------------------------------------------------------------
