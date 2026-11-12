@@ -134,16 +134,17 @@ def do_upload(args):
         # DEPO is what hands the entry to the backend; DRAFT parks it for the UI.
         "Workflow_Status": "DRAFT" if args.draft else "DEPO",
     }
-    defaults = ["RID", "RCT", "RMT", "RCB", "RMB", "id", "Process_Status",
-                "Record_Status_Detail", "Accession_Code", "Last_mmCIF_File_MD5",
-                "Release_Date", "Deposit_Date", "Submitter_Flag", "Submitter_Flag_Date"]
-
     if image_prep:
         image = put_asset(store, image_prep, image_asset, uid)
         row.update({"Image_File_URL": image["URL"], "Image_File_Name": image["Name"],
                     "Image_File_MD5": image["MD5"], "Image_File_Bytes": image["Bytes"]})
-    else:
-        defaults += ["Image_File_URL", "Image_File_Name", "Image_File_MD5", "Image_File_Bytes"]
+
+    # Every column this row does not supply is left to the server. ERMrest takes
+    # a column named in neither the row nor defaults= as supplied (as NULL) and
+    # refuses the insert when the client may not write it, so the list comes
+    # from the live table: a fixed one broke on dev's Accession_Issue_Time.
+    columns = get(catalog, "/schema/PDB/table/entry")["column_definitions"]
+    defaults = [c["name"] for c in columns if c["name"] not in row]
 
     created = check(catalog.post, "/entity/PDB:entry?defaults=" + ",".join(defaults),
                     json=[row]).json()
