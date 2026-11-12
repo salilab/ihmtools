@@ -7,7 +7,7 @@ name = "ihmtools"
 version = "0.0.1a14"
 description = "Command-line tools for the PDB-IHM validation and deposition systems"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = "MIT"
 authors = [{ name = "Arthur Zalevsky", email = "aozalevsky@gmail.com" }]
 keywords = ["pdb-ihm", "deriva", "ermrest", "hatrac", "integrative modeling"]
