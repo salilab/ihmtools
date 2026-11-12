@@ -73,6 +73,7 @@ ihmdep login                                  authenticate with Globus, once
 ihmdep logout                                 revoke those credentials and forget them
 ihmdep whoami                                 which account those credentials belong to
 ihmdep upload model.cif --image model.png     deposit an entry
+ihmdep update 9-DXAM --image model.png        add an image to an entry
 ihmdep run model.cif                          deposit and block
 ihmdep get_status                             list entries, newest first
 ihmdep get_status 9-DXAM                      workflow; process, plus an exit code
@@ -300,7 +301,7 @@ Its last section documents the supported **bulk upload** route, which
 | layout | files must sit in `~/…/deriva/{globus_id}/entry/` | any path |
 | pairing | `AB-AT.cif` and `AB-AT.png` must share a basename | `--image` names the file |
 | login | `deriva-globus-auth-utils login --refresh` | `ihmdep login` |
-| images | `.png` or `.jpg` | `.png` only |
+| images | `.png`, `.jpg` or `.jpeg` | the same |
 | re-upload | same name or md5 is an error | reports the existing RID and stops |
 
 Use whichever suits you. The official route is the one the PDB-IHM team

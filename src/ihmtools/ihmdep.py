@@ -8,6 +8,7 @@ GlobusNativeLogin for authentication.
     ihmdep.py whoami                      which account you are logged in as
     ihmdep.py upload model.cif            deposit an entry
     ihmdep.py upload model.cif --image f.png    ...with a preview image
+    ihmdep.py update 9-DXAM --image f.png   add a preview image to an entry
     ihmdep.py run model.cif               deposit and block until processing ends
     ihmdep.py get_status                  list entries, newest first
     ihmdep.py get_status 9-DXAM           workflow; process, plus an exit code
@@ -49,9 +50,16 @@ def asset_path(column):
 
 
 # The mmCIF annotation carries its own .cif filter; the image one carries no
-# filter at all, so that restriction is ours.
+# filter at all, so that restriction is ours: the types the official uploader
+# (deriva-upload-cli) takes.
 MMCIF_EXT = (".cif", ".CIF")
-IMAGE_EXT = (".png", ".PNG")
+IMAGE_EXT = (".png", ".jpg", ".jpeg", ".PNG", ".JPG", ".JPEG")
+
+# The server gives every entry deposited without an image this placeholder
+# (the PDB:entry insert trigger), so "no image yet" means this file rather than
+# an empty column.
+PLACEHOLDER_IMAGE = ("missing_image.png", "27994cb72f6d4780d9b09a85b9b5ac50")
+IMAGE_COLUMNS = ("Image_File_URL", "Image_File_Name", "Image_File_MD5", "Image_File_Bytes")
 
 # Files worth pulling back, and which table they hang off. Generated files join
 # on entry.id ("D_<RID>"); error files join on the RID itself.
@@ -121,6 +129,9 @@ def do_upload(args):
         e = existing[0]
         print("Already deposited as %s (%s / %s). Use --force to deposit again."
               % (e["RID"], e["Workflow_Status"], e["Process_Status"]), file=sys.stderr)
+        if image:
+            print("The image was not added. To add it to that entry:\n"
+                  "    ihmdep update %s --image %s" % (e["RID"], image), file=sys.stderr)
         print(e["RID"])
         return e["RID"]
 
@@ -165,6 +176,61 @@ def do_run(args):
 # --------------------------------------------------------------------------
 # status
 # --------------------------------------------------------------------------
+
+def has_image(row):
+    """Whether the entry has an image of its own rather than the placeholder."""
+    name, md5 = PLACEHOLDER_IMAGE
+    return bool(row["Image_File_MD5"]) and row["Image_File_MD5"] != md5 \
+        and row["Image_File_Name"] != name
+
+
+def do_update(args):
+    """Change an existing entry. For now that is its preview image."""
+    if not args.image:
+        sys.exit("nothing to update: give --image FILE")
+
+    catalog, store = connect()
+    # Check the file before anything is looked up, as upload does.
+    image_asset = get(catalog, asset_path("Image_File_URL"))
+    prepared = prepare_asset(args.image, image_asset, IMAGE_EXT)
+
+    # tcrs() is the server's own answer to "may this client change these
+    # columns of this row", so the workflow rules stay in the catalog's policy
+    # (owner only, and only up to RECORD READY or after a processing error).
+    rows = get(catalog, "/attributegroup/PDB:entry/RID=%s/RID,RCB,Workflow_Status,"
+                        "Process_Status,Image_File_Name,Image_File_MD5;tcrs:=tcrs(RID)"
+                        % urlquote(args.rid))
+    if not rows:
+        print("%s: unknown RID" % args.rid, file=sys.stderr)
+        sys.exit(3)
+    row = rows[0]
+    state = "%s / %s" % (row["Workflow_Status"], row["Process_Status"])
+
+    if row["Image_File_MD5"] == prepared["md5"]:
+        print("%s already has this image." % args.rid, file=sys.stderr)
+        print(args.rid)
+        return args.rid
+    if has_image(row) and not args.force:
+        sys.exit("%s already has an image (%s). Use --force to replace it."
+                 % (args.rid, row["Image_File_Name"]))
+    allowed = row["tcrs"].get("column_update", {})
+    if not all(allowed.get(c) for c in IMAGE_COLUMNS):
+        sys.exit("%s is %s, and its image can no longer be changed by this account.\n"
+                 "A depositor may change an entry's image while it is DRAFT, DEPO or\n"
+                 "RECORD READY, or after a processing error." % (args.rid, state))
+
+    # The asset path is the entry creator's, as the column's url_pattern says.
+    image = put_asset(store, prepared, image_asset, row["RCB"].rsplit("/", 1)[-1])
+    check(catalog.put, "/attributegroup/PDB:entry/RID;" + ",".join(IMAGE_COLUMNS),
+          json=[{"RID": row["RID"], "Image_File_URL": image["URL"],
+                 "Image_File_Name": image["Name"], "Image_File_MD5": image["MD5"],
+                 "Image_File_Bytes": image["Bytes"]}])
+    # An image changes nothing else: the server reprocesses an entry only for a
+    # new mmCIF or a new Workflow_Status.
+    print("%s: image is now %s (%s)" % (args.rid, image["Name"], state), file=sys.stderr)
+    print(args.rid)
+    return args.rid
+
 
 def is_pending(state):
     return state is None or state in PENDING_EXACT or state.startswith(PENDING_PREFIX)
@@ -466,7 +532,7 @@ def main():
         q.add_argument("file", nargs="?", help="mmCIF file to deposit")
         q.add_argument("--ihmcif", metavar="FILE",
                        help="same as the positional argument; accepted for clarity")
-        q.add_argument("--image", metavar="FILE", help="optional preview image (.png)")
+        q.add_argument("--image", metavar="FILE", help="optional preview image (.png or .jpg)")
         q.add_argument("--method", default="Integrative modeling", help="Method_Details value")
         q.add_argument("--draft", action="store_true",
                        help="create as DRAFT instead of DEPO, so nothing runs yet")
@@ -484,6 +550,13 @@ def main():
     q.add_argument("-v", "--verbose", action="store_true", help="print the full status detail")
     common.add_interval(q)
     q.set_defaults(func=do_run)
+
+    q = add("update", help="change an existing entry: add or replace its preview image")
+    q.add_argument("rid", help="the entry's RID")
+    q.add_argument("--image", metavar="FILE", help="preview image (.png or .jpg)")
+    q.add_argument("-f", "--force", action="store_true",
+                   help="replace an image the entry already has")
+    q.set_defaults(func=do_update)
 
     q = add("get_status", help="with RIDs: processing state, exit 0=done 1=error 2=pending "
                                "3=unknown. Without: list entries, newest first")

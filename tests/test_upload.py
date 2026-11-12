@@ -137,3 +137,23 @@ def test_upload_with_an_image_supplies_the_image_columns(deposit):
     assert row["Image_File_URL"] == "/hatrac/md5ofpng"
     assert not {"Image_File_URL", "Image_File_Name", "Image_File_MD5",
                 "Image_File_Bytes"} & set(defaults)
+
+
+def test_upload_of_a_deposited_file_says_what_became_of_the_image(monkeypatch, tmp_path, capsys):
+    """A re-run with --image used to drop the image without a word."""
+    cif = tmp_path / "model.cif"
+    cif.write_text("data_X\n")
+    png = tmp_path / "model.png"
+    png.write_bytes(b"png")
+    catalog = EntryCatalog(PRODUCTION)
+    monkeypatch.setattr(catalog, "get", lambda path, _get=catalog.get: FakeResponse(
+        [{"RID": "5-OLD", "Workflow_Status": "RECORD READY", "Process_Status": "Success"}])
+        if path.startswith("/entity/PDB:entry/mmCIF_File_MD5=") else _get(path))
+    monkeypatch.setattr(ihmdep, "connect", lambda: (catalog, "store"))
+    args = types.SimpleNamespace(file=str(cif), ihmcif=None, force=False, draft=False,
+                                 image=str(png), method="Integrative modeling")
+    assert ihmdep.do_upload(args) == "5-OLD"
+    err = capsys.readouterr().err
+    assert "The image was not added" in err
+    assert "ihmdep update 5-OLD --image %s" % png in err
+    assert catalog.inserts == []
