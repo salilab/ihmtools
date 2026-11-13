@@ -4,6 +4,7 @@ Everything here used to exist twice, once per front end. It is tested once
 now, which is the point of the module.
 """
 
+import argparse
 import io
 import pathlib
 import struct
@@ -134,23 +135,45 @@ def test_details_block_unescapes_literal_newlines():
     assert common.details_block("a\\nb", indent="") == "a\nb"
 
 
+HOST_SCOPE = "https://auth.globus.org/scopes/this-host/deriva_all"
+
+
 class FakeGlobus:
-    """Stands in for GlobusNativeLogin, recording what logout would have done."""
+    """Stands in for GlobusNativeLogin, recording what logout would have done.
+
+    Holds one token for this host's scope only, as an imported legacy login
+    does: like the real one, is_logged_in finds it only with exclude_defaults,
+    since otherwise it also demands the openid/profile scopes.
+    """
 
     def __init__(self, logged_in=True):
         self._logged_in = logged_in
         self.revoked = []
-        self.cleared = 0
+        self.cleared = []
+        self.keychain = []
         self.client = types.SimpleNamespace(
             token_storage=types.SimpleNamespace(clear_tokens=self._clear))
 
-    def _clear(self, *_a, **_kw):
-        self.cleared += 1
+    def _clear(self, requested_scopes=()):
+        self.cleared.append(set(requested_scopes))
 
-    def is_logged_in(self, hosts=()):
-        return self._logged_in
+    def is_logged_in(self, hosts=(), exclude_defaults=False):
+        if not (self._logged_in and exclude_defaults):
+            return None
+        return {"this-host": {"scope": HOST_SCOPE, "access_token": "tok"}}
 
-    def logout(self, hosts=()):
+    def hosts_to_scope_map(self, hosts):
+        return {h: [HOST_SCOPE] for h in hosts}
+
+    @staticmethod
+    def scope_set_from_scope_map(scope_map):
+        return {s for scopes in scope_map.values() for s in scopes}
+
+    def update_bdbag_keychain(self, token=None, host=None, delete=False):
+        self.keychain.append((token, host, delete))
+
+    def logout(self, hosts=(), exclude_defaults=False):
+        assert exclude_defaults, "the openid/profile tokens are not this server's"
         self.revoked.extend(hosts)
 
 
@@ -170,8 +193,29 @@ def test_logout_local_does_not_contact_globus(monkeypatch):
     aim_at()
 
     common.do_logout(types.SimpleNamespace(local=True))
-    assert fake.revoked == [], "--local must not reach the network"
-    assert fake.cleared == 1
+    assert fake.revoked == [], "--local must not revoke"
+    assert len(fake.cleared) == 1
+
+
+def test_logout_local_forgets_only_this_host(monkeypatch):
+    """The token file is shared with every DERIVA host on the machine."""
+    fake = FakeGlobus()
+    monkeypatch.setattr(common, "_globus", lambda: fake)
+    aim_at()
+
+    common.do_logout(types.SimpleNamespace(local=True))
+    assert fake.cleared == [{HOST_SCOPE}], "an empty scope set deletes the whole file"
+
+
+@pytest.mark.parametrize("local", [False, True])
+def test_logout_removes_the_bdbag_keychain_entry(monkeypatch, local):
+    """get_credential() copied the token there; deriva's logout leaves it."""
+    fake = FakeGlobus()
+    monkeypatch.setattr(common, "_globus", lambda: fake)
+    aim_at()
+
+    common.do_logout(types.SimpleNamespace(local=local))
+    assert fake.keychain == [("tok", common.HOST, True)]
 
 
 def test_logout_when_not_logged_in(monkeypatch, capsys):
@@ -180,7 +224,7 @@ def test_logout_when_not_logged_in(monkeypatch, capsys):
     aim_at()
 
     common.do_logout(types.SimpleNamespace(local=False))
-    assert fake.revoked == [] and fake.cleared == 0
+    assert fake.revoked == [] and fake.cleared == [] and fake.keychain == []
     assert "not logged in" in capsys.readouterr().err
 
 
@@ -225,6 +269,32 @@ def test_adopts_legacy_token(tmp_path, monkeypatch, capsys):
     # expires_in and state make the store reject the whole group
     assert set(written) <= common.TOKEN_GROUP_KEYS
     assert "Imported credentials" in capsys.readouterr().err
+
+
+def test_adoption_happens_once(tmp_path, monkeypatch):
+    """Left in place, the old file would log you back in after a logout."""
+    old, new = adoption(tmp_path, monkeypatch)
+    common.adopt_legacy_tokens()
+    assert not old.exists()
+    assert (tmp_path / "legacy.json.imported").exists()
+
+    new.unlink()                        # what `logout --local` used to do
+    common.adopt_legacy_tokens()
+    assert not new.exists(), "the token must not come back"
+
+
+def test_adoption_creates_derivas_directory(tmp_path, monkeypatch):
+    """On a machine that never ran deriva-py, ~/.deriva does not exist yet."""
+    import json as _json
+    old = tmp_path / "legacy.json"
+    old.write_text(_json.dumps(LEGACY))
+    new = tmp_path / "fresh" / ".deriva" / "globus-credential.json"
+    monkeypatch.setattr(common, "LEGACY_TOKENS", str(old))
+    monkeypatch.setattr(common, "DEFAULT_GLOBUS_CREDENTIAL_FILE", str(new))
+    monkeypatch.setattr(common, "DerivaJSONTokenStorage", lambda *a, **kw: _Storage(new))
+
+    common.adopt_legacy_tokens()
+    assert "usc_isrd" in _json.loads(new.read_text())
 
 
 def test_adoption_does_not_overwrite_derivas_store(tmp_path, monkeypatch):
@@ -597,3 +667,125 @@ def test_a_bare_invocation_targets_production(monkeypatch, name, host, catalog):
 
     mod.configure(types.SimpleNamespace())
     assert (common.HOST, common.CATALOG_ID) == (host, catalog)
+
+
+def test_salt_jpeg_adds_a_comment_after_the_start_of_image():
+    jpeg = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00rest-of-file\xff\xd9"
+    out = common.salt_jpeg(jpeg, "S")
+    assert out.startswith(b"\xff\xd8\xff\xfe")
+    length = int.from_bytes(out[4:6], "big")
+    assert out[6:4 + length] == b"ihmtools-salt: S"
+    assert out[4 + length:] == jpeg[2:], "everything after SOI is left as it was"
+
+
+@pytest.mark.parametrize("ext", [".jpg", ".jpeg", ".JPG"])
+def test_salted_handles_jpeg(tmp_path, ext):
+    src = tmp_path / ("preview" + ext)
+    src.write_bytes(b"\xff\xd8\xff\xd9")
+    out = pathlib.Path(common.salted(str(src), "S", str(tmp_path)))
+    assert out.suffix == ext and out.read_bytes() != src.read_bytes()
+
+
+@pytest.mark.parametrize("name, data", [("fake.png", b"GIF89a"), ("fake.jpg", b"\x89PNG"),
+                                        ("empty.png", b"")])
+def test_salted_refuses_bytes_that_are_not_what_the_name_says(tmp_path, name, data):
+    """A misnamed file used to end in a traceback from rindex()."""
+    src = tmp_path / name
+    src.write_bytes(data)
+    with pytest.raises(SystemExit) as caught:
+        common.salted(str(src), "S", str(tmp_path))
+    assert "cannot salt it" in str(caught.value)
+
+
+# --------------------------------------------------------------------------
+# small guards
+# --------------------------------------------------------------------------
+
+def test_emit_table_keeps_one_value_in_one_field():
+    """A multi-line Title must not split a row in two."""
+    lines = render(False, ["RID", "TITLE"], [["A", "two\nlines\tand a tab"]])
+    assert lines[1].split("\t") == ["A", "two lines and a tab"]
+
+
+@pytest.mark.parametrize("text", ["0", "-5", "soon"])
+def test_interval_must_be_a_positive_whole_number(text):
+    with pytest.raises(argparse.ArgumentTypeError):
+        common.seconds(text)
+
+
+def test_interval_on_the_command_line(monkeypatch):
+    q = argparse.ArgumentParser()
+    common.add_interval(q)
+    assert q.parse_args(["--interval", "5"]).interval == 5
+    with pytest.raises(SystemExit):
+        q.parse_args(["--interval", "0"])
+
+
+def test_an_empty_environment_variable_counts_as_unset(monkeypatch):
+    monkeypatch.setenv("TEST_HOST", "")
+    monkeypatch.setenv("TEST_CATALOG", "")
+    common.configure(types.SimpleNamespace(), MODES, "TEST", default_mode="dev")
+    assert common.HOST and common.CATALOG_ID
+
+
+def test_configure_forgets_the_previous_servers_identity(monkeypatch):
+    monkeypatch.setattr(common, "IDENTITY", CLIENT)
+    aim_at()
+    assert common.IDENTITY is None
+
+
+# --------------------------------------------------------------------------
+# error messages -- pass the server's own reason on
+# --------------------------------------------------------------------------
+
+def denial(text):
+    response = requests.Response()
+    response.status_code = 403
+    response.url = "https://h/ermrest/catalog/1/entity/PDB:entry"
+    response._content = text.encode()
+    return response
+
+
+def test_403_passes_on_the_servers_reason(monkeypatch):
+    monkeypatch.setattr(common, "IDENTITY", CLIENT)
+
+    def refused():
+        raise requests.HTTPError(response=denial(
+            "Access forbidden.\nDetail: insert on column Accession_Code\n"))
+    with pytest.raises(SystemExit) as caught:
+        common.check(refused)
+    message = str(caught.value)
+    assert "Server says: Access forbidden. Detail: insert on column Accession_Code" in message
+    assert "not your entry" in message, "membership is not the only cause"
+
+
+def test_server_says_strips_a_proxys_html():
+    assert common.server_says(denial("<html><body><h1>403 Forbidden</h1></body></html>")) \
+        == "403 Forbidden"
+
+
+# --------------------------------------------------------------------------
+# unique keys -- look before uploading
+# --------------------------------------------------------------------------
+
+def test_taken_asks_only_about_per_account_keys_it_has_values_for(monkeypatch):
+    asked = []
+    whoami_calls = []
+    monkeypatch.setattr(common, "whoami", lambda _c: whoami_calls.append(1) or
+                        "https://auth.globus.org/ME")
+
+    def get(_c, path):
+        asked.append(path)
+        return [{"RID": "X"}] if "File_MD5=m" in path else []
+    monkeypatch.setattr(common, "get", get)
+    keys = [{"unique_columns": k} for k in
+            (["RID"], ["Accession_Code"], ["RCB", "File_MD5"], ["RCB", "Title"],
+             ["id", "RCB"])]
+    found = common.taken(None, "S:T", keys, {"File_MD5": "m", "Title": "a title"})
+
+    assert found == [(["File_MD5"], {"RID": "X"})]
+    assert len(asked) == 2, "no query for a key without RCB, or for an unknown id"
+    assert whoami_calls == [1], "one identity lookup, not one per key"
+    assert all(p.startswith("/entity/S:T/RCB=https%3A%2F%2Fauth.globus.org%2FME&")
+               for p in asked)
+    assert any(p.endswith("Title=a%20title") for p in asked)

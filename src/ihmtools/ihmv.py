@@ -1,22 +1,21 @@
-#!/usr/bin/env python3
 """Minimal CLI for the PDB-IHM integrative-model validation catalog (IHMV).
 
 Built on deriva-py: ErmrestCatalog for records, HatracStore for files, and
 GlobusNativeLogin for authentication.
 
-    ihmv.py login                    authenticate with Globus (once)
-    ihmv.py whoami                   which account you are logged in as
-    ihmv.py upload model.cif         submit a structure for validation
-    ihmv.py run model.cif            upload and block until validation finishes
-    ihmv.py get_status               list entries, newest first
-    ihmv.py get_status 2ZJ           one word + an exit code you can loop on
-    ihmv.py set_status 2QJ --to Reprocess    ask the pipeline to run it again
-    ihmv.py download 2Y0 2XT         fetch those entries' validation reports
-    ihmv.py delete 2Y0               remove a record and its reports
+    ihmv login                          authenticate with Globus (once)
+    ihmv whoami                         which account you are logged in as
+    ihmv upload model.cif               submit a structure for validation
+    ihmv run model.cif                  upload and block until validation finishes
+    ihmv get_status                     list entries, newest first
+    ihmv get_status 2ZJ                 one word + an exit code you can loop on
+    ihmv set_status 2QJ --to Reprocess  ask the pipeline to run it again
+    ihmv download 2Y0 2XT               fetch those entries' validation reports
+    ihmv delete 2Y0                     remove a record and its reports
 
 Listings are aligned on a terminal and tab-separated when piped, with a
 '#'-prefixed header, so columns containing spaces still split cleanly:
-    ihmv.py get_status | awk -F'\t' '!/^#/ && $3=="Success" {print $1, $6}'
+    ihmv get_status | awk -F'\t' '!/^#/ && $3=="Success" {print $1, $6}'
 
 Targets the production server (catalog 101) unless --mode dev / --host / --catalog
 says otherwise; those may be given before or after the subcommand.
@@ -27,6 +26,7 @@ import sys
 import time
 import uuid
 
+import requests
 from deriva.core import urlquote
 
 from . import _common as common
@@ -50,9 +50,11 @@ REFUSAL = ("%s: this catalog only accepts %s. Other formats upload but then "
            "fail in the validation pipeline.")
 REPORTS = {"full": "Validation: Full PDF", "summary": "Validation: Summary PDF"}
 PENDING = {"New", "In Progress", "Reprocess"}   # not yet terminal
-# Processing_Status has no FK constraint here, so an unrecognised string would be
-# written silently -- these are the only two the tool will set. The rest are the
-# pipeline's own report of what happened.
+DONE = "Success"
+# Processing_Status is a foreign key into a vocabulary, but the policy that
+# limits submitters to setting New or Reprocess does not bind curators, and the
+# rest are the pipeline's own report of what happened -- so these two are the
+# only ones this tool will set, whoever runs it.
 SETTABLE = ("New", "Reprocess")
 
 
@@ -75,14 +77,29 @@ def do_upload(args):
     title = args.title or "%s_%s" % (os.path.splitext(prep["name"])[0],
                                      uuid.uuid4().hex[:8])
 
-    existing = get(catalog, "/entity/IHMV:Structure_mmCIF/File_MD5=%s&%s"
-                            % (prep["md5"], mine(catalog)))
-    if existing and not args.force:
-        e = existing[0]
-        print("Already submitted as %s (%s, %s). Use --force to submit again."
+    # The server keeps one record per file and per title for each submitter
+    # (and on dev one per file name too), so look before uploading anything.
+    keys = get(catalog, "/schema/IHMV/table/Structure_mmCIF")["keys"]
+    clashes = common.taken(catalog, "IHMV:Structure_mmCIF", keys,
+                           {"File_MD5": prep["md5"], "Title": title, "File_Name": prep["name"]})
+    same = [row for cols, row in clashes if "File_MD5" in cols]
+    if same:
+        e = same[0]
+        print("Already submitted as %s (%s, %s)."
               % (e["RID"], e["Title"], e["Processing_Status"]), file=sys.stderr)
-        print(e["RID"])
+        if args.force:
+            print("--force cannot submit it again: the server keeps one record per file.\n"
+                  "To validate it again: ihmv set_status %s --to Reprocess" % e["RID"],
+                  file=sys.stderr)
+        print(e["RID"], flush=True)
         return e["RID"]
+    for cols, e in clashes:
+        what = "title" if "Title" in cols else "file name"
+        sys.exit("%s: your record %s (%s) already has this %s, and the server allows\n"
+                 "only one per submitter. %s"
+                 % (path, e["RID"], e["Title"], what,
+                    "Give another --title." if what == "title"
+                    else "Rename the file to submit it as a new record."))
 
     put = put_asset(store, prep, asset, uid)
     row = {
@@ -97,7 +114,9 @@ def do_upload(args):
     created = check(catalog.post,
                     "/entity/IHMV:Structure_mmCIF?defaults=RID,RCT,RMT,RCB,RMB",
                     json=[row]).json()
-    print(created[0]["RID"])
+    # Flushed: under `run` the RID is the one line a caller wants straight
+    # away, and a piped stdout would otherwise hold it until validation ends.
+    print(created[0]["RID"], flush=True)
     return created[0]["RID"]
 
 
@@ -116,12 +135,15 @@ def status_code(results):
     Pending outranks Error deliberately: a batch with one failure and one still
     running should keep polling rather than stop early.
     """
-    states = [row["Processing_Status"] if row else None for _, row in results]
-    if any(st is None for st in states):
+    rows = [row for _, row in results]
+    if any(row is None for row in rows):
         return 3
+    states = [row["Processing_Status"] for row in rows]
     if any(st in PENDING for st in states):
         return 2
-    return 1 if any(st == "Error" for st in states) else 0
+    # Done means Success, and only that: an empty or unexpected status is not
+    # something a script should carry on from.
+    return 0 if all(st == DONE for st in states) else 1
 
 
 # One row shape shared by the listing and by `get_status -v`, so a verbose
@@ -235,12 +257,14 @@ def do_set_status(args):
     check(catalog.put, "/attributegroup/IHMV:Structure_mmCIF/RID;Processing_Status",
           json=[{"RID": rid, "Processing_Status": args.to} for rid in rids])
 
-    # Read back rather than echo the request, so the printed state is the truth.
-    updated = poll_status(rids, False)
+    # Read back rather than echo the request, so the printed state is the truth
+    # -- including a record deleted in the meantime.
+    updated = [(r, row["Processing_Status"] if row else "(gone)")
+               for r, row in poll_status(rids, False)]
     if len(rids) == 1:
-        print(updated[0][1]["Processing_Status"])
+        print(updated[0][1])
     else:
-        emit_table(["RID", "STATUS"], [[r, row["Processing_Status"]] for r, row in updated])
+        emit_table(["RID", "STATUS"], [list(u) for u in updated])
 
 
 def do_delete(args):
@@ -256,8 +280,9 @@ def do_delete(args):
                 print("%s: unknown RID" % rid, file=sys.stderr)
         sys.exit(3)
 
-    # Generated_File points at the structure by text with no FK, so nothing
-    # cascades -- deleting the structure alone would strand its reports.
+    # Counted only to show what goes: Generated_File's foreign key to the
+    # structure is ON DELETE CASCADE, and its own delete right is the
+    # pipeline's and the curators', never a submitter's.
     reports = {}
     for r in get_batched(catalog, "/attribute/IHMV:Generated_File/Structure_mmCIF=",
                          rids, "/Structure_mmCIF"):
@@ -273,21 +298,22 @@ def do_delete(args):
         sys.exit("aborted")
 
     for rid in rids:
-        # Reports first: if the second call fails the record still exists and
-        # the delete can be retried, rather than leaving orphaned reports.
-        # Only when there are some -- ERMrest answers a delete that matches
-        # nothing with 404, so asking unconditionally fails on any entry the
-        # pipeline has not finished with yet.
-        if reports.get(rid):
-            check(catalog.delete,
-                  "/entity/IHMV:Generated_File/Structure_mmCIF=%s" % urlquote(rid))
+        # The reports go with it: the server cascades the delete.
         check(catalog.delete,
               "/entity/IHMV:Structure_mmCIF/RID=%s" % urlquote(rid))
         print(rid)
 
     if args.purge_file:
+        seen = set()
         for rid in rids:
             md5, url = found[rid]["File_MD5"], found[rid]["File_URL"]
+            # The object itself, not one version of it. A version suffix is
+            # whatever follows the last ':' -- unless that is part of a path.
+            base, colon, version = url.rpartition(":")
+            path = base if colon and "/" not in version else url
+            if path in seen:
+                continue        # two of the records just deleted shared it
+            seen.add(path)
             # Hatrac objects here are content-addressed, so one file can back
             # several records; only purge once nothing else references it.
             others = get(catalog, "/attribute/IHMV:Structure_mmCIF/File_MD5=%s/RID"
@@ -297,7 +323,15 @@ def do_delete(args):
                       % (url.rsplit("/", 1)[-1], ", ".join(r["RID"] for r in others)),
                       file=sys.stderr)
                 continue
-            check(store.del_obj, url.rsplit(":", 1)[0])
+            try:
+                store.del_obj(path)
+            except requests.HTTPError as e:
+                if getattr(e.response, "status_code", None) != 403:
+                    common.fail(e, store.del_obj)
+                # The records are gone already; this only leaves a file behind.
+                print("  kept %s -- the server does not let this account delete "
+                      "uploaded files" % url.rsplit("/", 1)[-1], file=sys.stderr)
+                continue
             print("  purged %s" % url.rsplit("/", 1)[-1], file=sys.stderr)
 
 
@@ -307,12 +341,17 @@ def do_download(args):
     wanted = [REPORTS[k] for k in ("full", "summary") if getattr(args, k)] or list(REPORTS.values())
     # ERMrest takes a disjunction, so the whole batch is one round trip.
     targets = {r: [] for r in rids}
+    # Read even without --mmcif: it is also how a wrong RID is told apart
+    # from a record with no reports yet.
+    records = get_batched(catalog, "/attribute/IHMV:Structure_mmCIF/RID=", rids,
+                          "/RID,File_Name,File_URL")
+    known = {r["RID"] for r in records}
     if args.mmcif:
-        for r in get_batched(catalog, "/attribute/IHMV:Structure_mmCIF/RID=", rids,
-                             "/RID,File_Name,File_URL"):
+        for r in records:
             # Report names already carry the RID; submitted files don't, so
             # prefix them when a batch could otherwise collide.
-            name = r["File_Name"] if len(rids) == 1 else "%s_%s" % (r["RID"], r["File_Name"])
+            base = os.path.basename(r["File_Name"])
+            name = base if len(rids) == 1 else "%s_%s" % (r["RID"], base)
             targets[r["RID"]].append((name, r["File_URL"]))
     for r in get_batched(catalog, "/attribute/IHMV:Generated_File/Structure_mmCIF=",
                          rids, "/Structure_mmCIF,File_Type,File_Name,File_URL"):
@@ -320,20 +359,28 @@ def do_download(args):
             targets[r["Structure_mmCIF"]].append((r["File_Name"], r["File_URL"]))
 
     os.makedirs(args.outdir, exist_ok=True)
-    missing = []
+    missing, unknown = [], []
     for rid in rids:
+        if rid not in known:
+            unknown.append(rid)
+            sys.stdout.flush()
+            print("%s: unknown RID" % rid, file=sys.stderr)
+            continue
         if not targets[rid]:
             missing.append(rid)
             sys.stdout.flush()
-            print("%s: nothing to download (no reports yet, or wrong RID)" % rid, file=sys.stderr)
+            print("%s: nothing to download yet (no reports)" % rid, file=sys.stderr)
             continue
         for name, url in targets[rid]:
-            dest = os.path.join(args.outdir, name)
+            # Names come from the server; never let one name a directory.
+            dest = os.path.join(args.outdir, os.path.basename(name))
             # File_URL is version-qualified and its prefix differs between
             # submitted and generated files; always use it verbatim.
             check(store.get_obj, url, destfilename=dest)
             print(dest)
 
+    if unknown:
+        sys.exit(3)         # as get_status: the RID itself is wrong
     if missing:
         sys.exit(1 if len(missing) == len(rids) else
                  "%d of %d RIDs had nothing to download" % (len(missing), len(rids)))
@@ -352,8 +399,11 @@ def main():
         q.add_argument("file", help="mmCIF file")
         q.add_argument("-t", "--title", help="default: <basename>_<uuid8>")
         q.add_argument("-d", "--description")
+        # Kept so scripts that pass it still run. It cannot do what it used to
+        # promise: the server allows one record per file per submitter.
         q.add_argument("-f", "--force", action="store_true",
-                       help="submit again even if this file was already submitted")
+                       help="has no effect: the server keeps one record per file "
+                            "(set_status --to Reprocess validates it again)")
         common.add_salt(q)
         return q
 
@@ -387,8 +437,9 @@ def main():
     q = add("delete", help="delete entries and their generated reports")
     add_rids(q)
     q.add_argument("--purge-file", action="store_true",
-                   help="also delete the submitted file from Hatrac, "
-                        "unless another record shares it")
+                   help="also delete the submitted file from Hatrac, unless another "
+                        "record shares it. Curators only: the servers keep submitters' "
+                        "uploads, and then the file is reported as kept")
     q.add_argument("-y", "--yes", action="store_true", help="skip the confirmation prompt")
     q.set_defaults(func=do_delete)
 

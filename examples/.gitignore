@@ -1,5 +1,5 @@
 # Written by the assemble scripts
-*/data/assembled.cif
+*/data/assembled*.cif
 
 # Scratch copies made while testing
 G_*_test/

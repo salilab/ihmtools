@@ -235,23 +235,33 @@ value would read `--wait 300` as an interval rather than as RID 300.
 
 ### Re-uploading the same file
 
-Both tools dedupe on md5, so uploading a file you have already deposited
-returns the existing RID instead of making a new entry. That is what you want
-in production and the opposite of what you want while testing, so `upload` and
-`run` take `--salt`:
+Both servers keep one entry per file for each account: one per md5, and one
+per file name (on dev, `ihmv` records are also one per file name; everywhere,
+one per title). So uploading a file you have already deposited returns the
+existing RID instead of making a new entry, and both tools check these keys
+before uploading anything:
+
+- the same file: the existing RID is printed, and the command succeeds;
+- a changed file under a name you have already used: refused, naming the
+  entry it would clash with. Rename the file to deposit it as a new entry;
+- with `ihmv`, a `--title` already in use: refused the same way.
+
+That is what you want in production and the opposite of what you want while
+testing, so `upload` and `run` take `--salt`:
 
 ```bash
 ihmdep --mode dev upload model.cif --image model.png --salt
 ```
 
 It uploads a timestamped copy — a trailing `# ihmtools-salt:` comment in the
-mmCIF, a `tEXt` chunk in the PNG — so the name and the md5 are both new and
-nothing has to be edited by hand. The copies go to a temporary directory,
-whose path is printed. `--salt` takes no value, for the same reason `--wait`
-does not: it sits beside a positional filename.
+mmCIF, a `tEXt` chunk in a PNG, a comment segment in a JPEG — so the name and
+the md5 are both new and nothing has to be edited by hand. The copies go to a
+temporary directory, whose path is printed. `--salt` takes no value, for the
+same reason `--wait` does not: it sits beside a positional filename.
 
-Use `--force` instead when you want the file you actually have on disk
-deposited a second time, byte for byte.
+`--force` no longer does anything: it promised a second entry from the same
+bytes, which the server refuses. It is still accepted so scripts that pass it
+keep working. To validate a file again, `ihmv set_status RID --to Reprocess`.
 
 Depositing several entries works the same way. `upload` prints nothing but
 the RID on stdout, so the loop's output is the RID list, and every later
@@ -342,7 +352,7 @@ pip install -e '.[test]'
 pytest
 ```
 
-154 tests, offline — no network, no credentials, nothing written.
+The tests run offline — no network, no credentials, nothing written.
 
 Two further tests drive a full round trip against the **dev** servers and are
 deselected unless asked for:

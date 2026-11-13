@@ -1,31 +1,31 @@
-#!/usr/bin/env python3
 """Minimal CLI for the PDB-IHM deposition system.
 
 Built on deriva-py: ErmrestCatalog for records, HatracStore for files, and
 GlobusNativeLogin for authentication.
 
-    ihmdep.py login                       authenticate with Globus (once)
-    ihmdep.py whoami                      which account you are logged in as
-    ihmdep.py upload model.cif            deposit an entry
-    ihmdep.py upload model.cif --image f.png    ...with a preview image
-    ihmdep.py update 9-DXAM --image f.png   add a preview image to an entry
-    ihmdep.py run model.cif               deposit and block until processing ends
-    ihmdep.py get_status                  list entries, newest first
-    ihmdep.py get_status 9-DXAM           workflow; process, plus an exit code
-    ihmdep.py get_status 9-DXAM --process   just one of them, for a script
-    ihmdep.py set_status 9-DXAM --to DEPO   move it to another workflow state
-    ihmdep.py download 9-DXAM             fetch its generated mmCIF and reports
-    ihmdep.py delete 9-DXAM               remove a pre-submit entry
+    ihmdep login                          authenticate with Globus (once)
+    ihmdep whoami                         which account you are logged in as
+    ihmdep upload model.cif               deposit an entry
+    ihmdep upload model.cif --image f.png  ...with a preview image
+    ihmdep update 9-DXAM --image f.png    add a preview image to an entry
+    ihmdep run model.cif                  deposit and block until processing ends
+    ihmdep get_status                     list entries, newest first
+    ihmdep get_status 9-DXAM              workflow; process, plus an exit code
+    ihmdep get_status 9-DXAM --process    just one of them, for a script
+    ihmdep set_status 9-DXAM --to DEPO    move it to another workflow state
+    ihmdep download 9-DXAM                fetch its generated mmCIF and reports
+    ihmdep delete 9-DXAM                  remove a pre-submit entry
 
 Listings are aligned on a terminal and tab-separated when piped, with a
 '#'-prefixed header, so columns containing spaces still split cleanly:
-    ihmdep.py get_status | awk -F'\t' '!/^#/ && $5 ~ /^Error/ {print $1}'
+    ihmdep get_status | awk -F'\t' '!/^#/ && $5 ~ /^Error/ {print $1}'
 
 Targets the production server (catalog 1) unless --mode dev / --host / --catalog
 says otherwise; those may be given before or after the subcommand.
 """
 
 import os
+import shlex
 import sys
 import time
 
@@ -124,17 +124,21 @@ def do_upload(args):
         image_asset = get(catalog, asset_path("Image_File_URL"))
         image_prep = prepare_asset(image, image_asset, IMAGE_EXT)
 
-    existing = get(catalog, "/entity/PDB:entry/mmCIF_File_MD5=%s&%s"
-                            % (mmcif_prep["md5"], mine(catalog)))
-    if existing and not args.force:
-        e = existing[0]
-        print("Already deposited as %s (%s / %s). Use --force to deposit again."
-              % (e["RID"], e["Workflow_Status"], e["Process_Status"]), file=sys.stderr)
-        if image:
-            print("The image was not added. To add it to that entry:\n"
-                  "    ihmdep update %s --image %s" % (e["RID"], image), file=sys.stderr)
-        print(e["RID"])
-        return e["RID"]
+    # The server keeps one entry per file and one per file name for each
+    # depositor, so look for both before anything is uploaded.
+    table = get(catalog, "/schema/PDB/table/entry")
+    clashes = common.taken(catalog, "PDB:entry", table["keys"],
+                           {"mmCIF_File_MD5": mmcif_prep["md5"],
+                            "mmCIF_File_Name": mmcif_prep["name"]})
+    same = [row for cols, row in clashes if "mmCIF_File_MD5" in cols]
+    if same:
+        return already_deposited(same[0], image_prep, image, args.force)
+    if clashes:
+        e = clashes[0][1]
+        sys.exit("%s: your entry %s (%s / %s) was deposited from a different file of\n"
+                 "the same name, and the server keeps one entry per file name.\n"
+                 "To deposit this file as a new entry, rename it."
+                 % (path, e["RID"], e["Workflow_Status"], e["Process_Status"]))
 
     mmcif = put_asset(store, mmcif_prep, mmcif_asset, uid)
     row = {
@@ -155,20 +159,40 @@ def do_upload(args):
     # a column named in neither the row nor defaults= as supplied (as NULL) and
     # refuses the insert when the client may not write it, so the list comes
     # from the live table: a fixed one broke on dev's Accession_Issue_Time.
-    columns = get(catalog, "/schema/PDB/table/entry")["column_definitions"]
-    defaults = [c["name"] for c in columns if c["name"] not in row]
+    defaults = [c["name"] for c in table["column_definitions"] if c["name"] not in row]
 
     created = check(catalog.post, "/entity/PDB:entry?defaults=" + ",".join(defaults),
                     json=[row]).json()
-    print(created[0]["RID"])
+    # Flushed: under `run` the RID is the one line a caller wants straight
+    # away, and a piped stdout would otherwise hold it until processing ends.
+    print(created[0]["RID"], flush=True)
     return created[0]["RID"]
+
+
+def already_deposited(e, image_prep, image, force):
+    """This exact file is already an entry of yours: report it as the result."""
+    print("Already deposited as %s (%s / %s)."
+          % (e["RID"], e["Workflow_Status"], e["Process_Status"]), file=sys.stderr)
+    if force:
+        print("--force cannot deposit it again: the server keeps one entry per file.\n"
+              "For a test copy that is new to the server, use --salt.", file=sys.stderr)
+    if image_prep and e["Image_File_MD5"] != image_prep["md5"]:
+        print("The image was not added. To %s it:\n    ihmdep update %s --image %s%s"
+              % ("replace that entry's image with" if has_image(e) else "add",
+                 e["RID"], shlex.quote(image), " --force" if has_image(e) else ""),
+              file=sys.stderr)
+    print(e["RID"], flush=True)
+    return e["RID"]
 
 
 def do_run(args):
     """upload, then block until the backend finishes. Exits with status's code."""
-    rid = do_upload(args)
     if args.draft:
-        sys.exit("%s created as DRAFT; nothing will run until it is set to DEPO." % rid)
+        # Refuse before uploading: a DRAFT is never processed, so there would
+        # be nothing to wait for, only an entry made by a command that failed.
+        sys.exit("run waits for processing, which never starts for a DRAFT.\n"
+                 "Use `ihmdep upload --draft` instead.")
+    rid = do_upload(args)
     args.rids, args.wait = [rid], True     # run always waits
     print("deposited %s; waiting for processing" % rid, file=sys.stderr)
     do_status(args)
@@ -207,25 +231,32 @@ def do_update(args):
     row = rows[0]
     state = "%s / %s" % (row["Workflow_Status"], row["Process_Status"])
 
+    # Already done first, so re-running a script stays a quiet success even
+    # once the entry has moved past the states that allow changes.
     if row["Image_File_MD5"] == prepared["md5"]:
         print("%s already has this image." % args.rid, file=sys.stderr)
         print(args.rid)
         return args.rid
-    if has_image(row) and not args.force:
-        sys.exit("%s already has an image (%s). Use --force to replace it."
-                 % (args.rid, row["Image_File_Name"]))
-    allowed = row["tcrs"].get("column_update", {})
+    # Then whether a change is possible at all, before suggesting --force for
+    # one that would only be refused next.
+    allowed = (row.get("tcrs") or {}).get("column_update") or {}
     if not all(allowed.get(c) for c in IMAGE_COLUMNS):
         sys.exit("%s is %s, and its image can no longer be changed by this account.\n"
                  "A depositor may change an entry's image while it is DRAFT, DEPO or\n"
                  "RECORD READY, or after a processing error." % (args.rid, state))
+    if has_image(row) and not args.force:
+        sys.exit("%s already has an image (%s). Use --force to replace it."
+                 % (args.rid, row["Image_File_Name"]))
 
     # The asset path is the entry creator's, as the column's url_pattern says.
     image = put_asset(store, prepared, image_asset, row["RCB"].rsplit("/", 1)[-1])
-    check(catalog.put, "/attributegroup/PDB:entry/RID;" + ",".join(IMAGE_COLUMNS),
-          json=[{"RID": row["RID"], "Image_File_URL": image["URL"],
-                 "Image_File_Name": image["Name"], "Image_File_MD5": image["MD5"],
-                 "Image_File_Bytes": image["Bytes"]}])
+    updated = check(catalog.put, "/attributegroup/PDB:entry/RID;" + ",".join(IMAGE_COLUMNS),
+                    json=[{"RID": row["RID"], "Image_File_URL": image["URL"],
+                           "Image_File_Name": image["Name"], "Image_File_MD5": image["MD5"],
+                           "Image_File_Bytes": image["Bytes"]}]).json()
+    # A PUT whose key matches nothing answers 200 with an empty list.
+    if len(updated) != 1:
+        sys.exit("%s: the entry is gone; nothing was changed" % args.rid)
     # An image changes nothing else: the server reprocesses an entry only for a
     # new mmCIF or a new Workflow_Status.
     print("%s: image is now %s (%s)" % (args.rid, image["Name"], state), file=sys.stderr)
@@ -239,6 +270,16 @@ def is_pending(state):
 
 def is_error(state):
     return bool(state) and state.startswith(ERROR_PREFIX)
+
+
+def is_running(row):
+    """Whether the backend still has work queued or under way for this entry.
+
+    Process_Status alone over-reports. A DRAFT carries the column default
+    "New (trigger backend process)", yet nothing runs until it is set to DEPO;
+    and ERROR is final whatever Process_Status still says.
+    """
+    return row["Workflow_Status"] not in ("DRAFT", "ERROR") and is_pending(row["Process_Status"])
 
 
 def poll_status(rids, verbose):
@@ -255,15 +296,15 @@ def status_code(results):
     """3 unknown > 2 pending > 1 error > 0 done.
 
     Pending outranks Error deliberately: a batch with one failure and one still
-    running should keep polling rather than stop early.
+    running should keep polling rather than stop early. A DRAFT is pending too
+    -- it is not finished -- but nothing will move it, so --wait stops on it.
     """
     rows = [row for _, row in results]
     if any(row is None for row in rows):
         return 3
-    states = [r["Process_Status"] for r in rows]
-    if any(is_pending(st) for st in states):
+    if any(is_running(r) or r["Workflow_Status"] == "DRAFT" for r in rows):
         return 2
-    if any(is_error(st) for st in states) or any(r["Workflow_Status"] == "ERROR" for r in rows):
+    if any(is_error(r["Process_Status"]) or r["Workflow_Status"] == "ERROR" for r in rows):
         return 1
     return 0
 
@@ -313,15 +354,19 @@ def do_status(args):
     results = poll_status(rids, args.verbose)
     code = status_code(results)
     while args.wait and code == 2:
-        waiting = sum(1 for _, row in results if row and is_pending(row["Process_Status"]))
+        waiting = sum(1 for _, row in results if row and is_running(row))
+        if not waiting:
+            break       # only DRAFTs left, and those wait for their depositor
         print("%d/%d still running; next check in %ds"
               % (waiting, len(rids), args.interval), file=sys.stderr)
         time.sleep(args.interval)
         results = poll_status(rids, args.verbose)
         code = status_code(results)
-
-    def state_of(row):
-        return row["Process_Status"] or row["Workflow_Status"]
+    if args.wait:
+        for rid, row in results:
+            if row and row["Workflow_Status"] == "DRAFT":
+                print("%s is DRAFT: nothing runs until `ihmdep set_status %s --to DEPO`"
+                      % (rid, rid), file=sys.stderr)
 
     asked = [f for f in STATUS_FIELDS if getattr(args, f[0], False)]
 
@@ -402,12 +447,14 @@ def do_set_status(args):
     check(catalog.put, "/attributegroup/PDB:entry/RID;Workflow_Status",
           json=[{"RID": rid, "Workflow_Status": args.to} for rid in rids])
 
-    # Read back rather than echo the request, so the printed state is the truth.
-    updated = poll_status(rids, False)
+    # Read back rather than echo the request, so the printed state is the truth
+    # -- including an entry deleted in the meantime.
+    updated = [(r, row["Workflow_Status"] if row else "(gone)")
+               for r, row in poll_status(rids, False)]
     if len(rids) == 1:
-        print(updated[0][1]["Workflow_Status"])
+        print(updated[0][1])
     else:
-        emit_table(["RID", "WORKFLOW"], [[r, row["Workflow_Status"]] for r, row in updated])
+        emit_table(["RID", "WORKFLOW"], [list(u) for u in updated])
 
 
 def not_deletable(row):
@@ -496,10 +543,10 @@ def do_download(args):
             targets[r["Entry_RID"]].append((r["File_Name"], r["File_URL"]))
 
     os.makedirs(args.outdir, exist_ok=True)
-    missing = []
+    missing, unknown = [], []
     for rid in rids:
         if rid not in ids:
-            missing.append(rid)
+            unknown.append(rid)
             sys.stdout.flush()
             print("%s: unknown RID" % rid, file=sys.stderr)
             continue
@@ -509,12 +556,15 @@ def do_download(args):
             print("%s: nothing to download yet (%s)" % (rid, ids[rid]), file=sys.stderr)
             continue
         for name, url in targets[rid]:
-            # Generated names already carry the entry id; keep them as-is.
-            dest = os.path.join(args.outdir, name)
+            # Generated names already carry the entry id; keep them, but never
+            # let one name a directory -- they come from the server.
+            dest = os.path.join(args.outdir, os.path.basename(name))
             # File_URL is version-qualified; always use it verbatim.
             check(store.get_obj, url, destfilename=dest)
             print(dest)
 
+    if unknown:
+        sys.exit(3)         # as get_status: the RID itself is wrong
     if missing:
         sys.exit(1 if len(missing) == len(rids) else
                  "%d of %d RIDs had nothing to download" % (len(missing), len(rids)))
@@ -724,8 +774,11 @@ def main():
         q.add_argument("--method", default="Integrative modeling", help="Method_Details value")
         q.add_argument("--draft", action="store_true",
                        help="create as DRAFT instead of DEPO, so nothing runs yet")
+        # Kept so scripts that pass it still run. It cannot do what it used to
+        # promise: the server allows one entry per file per depositor.
         q.add_argument("-f", "--force", action="store_true",
-                       help="deposit again even if this file was already deposited")
+                       help="has no effect: the server keeps one entry per file "
+                            "(--salt deposits a fresh test copy)")
         common.add_salt(q)
         return q
 
@@ -752,8 +805,8 @@ def main():
     q.add_argument("-a", "--all", action="store_true",
                    help="when listing, everyone's entries rather than just yours")
     q.add_argument("-v", "--verbose", action="store_true", help="print the full status detail")
-    # Which status to report. Neither given keeps the long-standing behaviour:
-    # a single RID prints Process_Status, several print both columns.
+    # Which status to report. Neither given reports both: "WORKFLOW; PROCESS"
+    # for a single RID, both columns for several.
     q.add_argument("--workflow", action="store_true",
                    help="report Workflow_Status (DRAFT, DEPO, RECORD READY, SUBMIT, ...)")
     q.add_argument("--process", action="store_true",
