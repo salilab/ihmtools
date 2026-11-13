@@ -272,3 +272,41 @@ def test_a_put_that_matched_no_row_is_not_reported_as_success(wired, monkeypatch
     with pytest.raises(SystemExit) as e:
         ihmdep.do_reupload(args_for(wired))
     assert e.value.code not in (0, None)
+
+
+# --------------------------------------------------------------------------
+# the (Workflow_Status, Process_Status) table
+# --------------------------------------------------------------------------
+
+def test_a_released_entry_is_parked_at_draft():
+    code, _, target = ihmdep.reupload_verdict(entry("Success", workflow="REL"), "new")
+    assert (code, target) == (ihmdep.REUPLOAD_OK, "DRAFT")
+
+
+@pytest.mark.parametrize("workflow", ["HOLD", "mmCIF CREATED", "RECORD READY"])
+def test_success_elsewhere_is_refused(workflow):
+    """"Success" alone is ambiguous; only the pairs the table names re-arm."""
+    code, _, target = ihmdep.reupload_verdict(entry("Success", workflow=workflow), "new")
+    assert (code, target) == (ihmdep.REUPLOAD_REFUSED, None)
+
+
+@pytest.mark.parametrize("workflow", ihmdep.NEVER_REARM_FROM)
+def test_an_entry_the_backend_may_hold_is_refused(workflow):
+    """An error stamped while the stage is still set: re-arming to that same
+    stage is no change of Workflow_Status, so the trigger would not reset
+    Process_Status and the entry would be left with a new file but no run."""
+    code, why, _ = ihmdep.reupload_verdict(
+        entry("Error: generating mmCIF file", workflow=workflow), "new")
+    assert code == ihmdep.REUPLOAD_REFUSED
+    assert workflow in why
+
+
+def test_the_table_and_the_guards_stay_disjoint():
+    assert not {wf for wf, _ in ihmdep.REUPLOAD_STAGE} & set(ihmdep.NEVER_REARM_FROM)
+    assert not set(ihmdep.REUPLOAD_STAGE.values()) & set(ihmdep.NEVER_REARM_TO)
+
+
+def test_a_bad_table_entry_stops_the_loop(monkeypatch):
+    monkeypatch.setitem(ihmdep.REUPLOAD_STAGE, ("REL", "Success"), "HOLD")
+    code, _, _ = ihmdep.reupload_verdict(entry("Success", workflow="REL"), "new")
+    assert code == ihmdep.REUPLOAD_ENVIRONMENT
