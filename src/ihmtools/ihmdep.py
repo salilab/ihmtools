@@ -8,7 +8,6 @@ GlobusNativeLogin for authentication.
     ihmdep.py whoami                      which account you are logged in as
     ihmdep.py upload model.cif            deposit an entry
     ihmdep.py upload model.cif --image f.png    ...with a preview image
-    ihmdep.py update 9-DXAM --image f.png   add a preview image to an entry
     ihmdep.py run model.cif               deposit and block until processing ends
     ihmdep.py get_status                  list entries, newest first
     ihmdep.py get_status 9-DXAM           workflow; process, plus an exit code
@@ -51,16 +50,9 @@ def asset_path(column):
 
 
 # The mmCIF annotation carries its own .cif filter; the image one carries no
-# filter at all, so that restriction is ours: the types the official uploader
-# (deriva-upload-cli) takes.
+# filter at all, so that restriction is ours.
 MMCIF_EXT = (".cif", ".CIF")
-IMAGE_EXT = (".png", ".jpg", ".jpeg", ".PNG", ".JPG", ".JPEG")
-
-# The server gives every entry deposited without an image this placeholder
-# (the PDB:entry insert trigger), so "no image yet" means this file rather than
-# an empty column.
-PLACEHOLDER_IMAGE = ("missing_image.png", "27994cb72f6d4780d9b09a85b9b5ac50")
-IMAGE_COLUMNS = ("Image_File_URL", "Image_File_Name", "Image_File_MD5", "Image_File_Bytes")
+IMAGE_EXT = (".png", ".PNG")
 
 # Files worth pulling back, and which table they hang off. Generated files join
 # on entry.id ("D_<RID>"); error files join on the RID itself.
@@ -130,9 +122,6 @@ def do_upload(args):
         e = existing[0]
         print("Already deposited as %s (%s / %s). Use --force to deposit again."
               % (e["RID"], e["Workflow_Status"], e["Process_Status"]), file=sys.stderr)
-        if image:
-            print("The image was not added. To add it to that entry:\n"
-                  "    ihmdep update %s --image %s" % (e["RID"], image), file=sys.stderr)
         print(e["RID"])
         return e["RID"]
 
@@ -146,17 +135,16 @@ def do_upload(args):
         # DEPO is what hands the entry to the backend; DRAFT parks it for the UI.
         "Workflow_Status": "DRAFT" if args.draft else "DEPO",
     }
+    defaults = ["RID", "RCT", "RMT", "RCB", "RMB", "id", "Process_Status",
+                "Record_Status_Detail", "Accession_Code", "Last_mmCIF_File_MD5",
+                "Release_Date", "Deposit_Date", "Submitter_Flag", "Submitter_Flag_Date"]
+
     if image_prep:
         image = put_asset(store, image_prep, image_asset, uid)
         row.update({"Image_File_URL": image["URL"], "Image_File_Name": image["Name"],
                     "Image_File_MD5": image["MD5"], "Image_File_Bytes": image["Bytes"]})
-
-    # Every column this row does not supply is left to the server. ERMrest takes
-    # a column named in neither the row nor defaults= as supplied (as NULL) and
-    # refuses the insert when the client may not write it, so the list comes
-    # from the live table: a fixed one broke on dev's Accession_Issue_Time.
-    columns = get(catalog, "/schema/PDB/table/entry")["column_definitions"]
-    defaults = [c["name"] for c in columns if c["name"] not in row]
+    else:
+        defaults += ["Image_File_URL", "Image_File_Name", "Image_File_MD5", "Image_File_Bytes"]
 
     created = check(catalog.post, "/entity/PDB:entry?defaults=" + ",".join(defaults),
                     json=[row]).json()
@@ -177,61 +165,6 @@ def do_run(args):
 # --------------------------------------------------------------------------
 # status
 # --------------------------------------------------------------------------
-
-def has_image(row):
-    """Whether the entry has an image of its own rather than the placeholder."""
-    name, md5 = PLACEHOLDER_IMAGE
-    return bool(row["Image_File_MD5"]) and row["Image_File_MD5"] != md5 \
-        and row["Image_File_Name"] != name
-
-
-def do_update(args):
-    """Change an existing entry. For now that is its preview image."""
-    if not args.image:
-        sys.exit("nothing to update: give --image FILE")
-
-    catalog, store = connect()
-    # Check the file before anything is looked up, as upload does.
-    image_asset = get(catalog, asset_path("Image_File_URL"))
-    prepared = prepare_asset(args.image, image_asset, IMAGE_EXT)
-
-    # tcrs() is the server's own answer to "may this client change these
-    # columns of this row", so the workflow rules stay in the catalog's policy
-    # (owner only, and only up to RECORD READY or after a processing error).
-    rows = get(catalog, "/attributegroup/PDB:entry/RID=%s/RID,RCB,Workflow_Status,"
-                        "Process_Status,Image_File_Name,Image_File_MD5;tcrs:=tcrs(RID)"
-                        % urlquote(args.rid))
-    if not rows:
-        print("%s: unknown RID" % args.rid, file=sys.stderr)
-        sys.exit(3)
-    row = rows[0]
-    state = "%s / %s" % (row["Workflow_Status"], row["Process_Status"])
-
-    if row["Image_File_MD5"] == prepared["md5"]:
-        print("%s already has this image." % args.rid, file=sys.stderr)
-        print(args.rid)
-        return args.rid
-    if has_image(row) and not args.force:
-        sys.exit("%s already has an image (%s). Use --force to replace it."
-                 % (args.rid, row["Image_File_Name"]))
-    allowed = row["tcrs"].get("column_update", {})
-    if not all(allowed.get(c) for c in IMAGE_COLUMNS):
-        sys.exit("%s is %s, and its image can no longer be changed by this account.\n"
-                 "A depositor may change an entry's image while it is DRAFT, DEPO or\n"
-                 "RECORD READY, or after a processing error." % (args.rid, state))
-
-    # The asset path is the entry creator's, as the column's url_pattern says.
-    image = put_asset(store, prepared, image_asset, row["RCB"].rsplit("/", 1)[-1])
-    check(catalog.put, "/attributegroup/PDB:entry/RID;" + ",".join(IMAGE_COLUMNS),
-          json=[{"RID": row["RID"], "Image_File_URL": image["URL"],
-                 "Image_File_Name": image["Name"], "Image_File_MD5": image["MD5"],
-                 "Image_File_Bytes": image["Bytes"]}])
-    # An image changes nothing else: the server reprocesses an entry only for a
-    # new mmCIF or a new Workflow_Status.
-    print("%s: image is now %s (%s)" % (args.rid, image["Name"], state), file=sys.stderr)
-    print(args.rid)
-    return args.rid
-
 
 def is_pending(state):
     return state is None or state in PENDING_EXACT or state.startswith(PENDING_PREFIX)
@@ -523,24 +456,43 @@ def do_download(args):
 # --------------------------------------------------------------------------
 # re-upload -- replacing the submitted file on an entry past deposition
 #
-# Admin-only, and narrow on purpose. The backend re-reads the submitted mmCIF
-# at SUBMIT, SUBMISSION COMPLETE and RELEASE READY, copying categories it
-# holds nowhere else straight out of it, so an unusable original strands the
-# entry at whichever of those stages it reached. Replacing the file fixes that
-# -- but the entry trigger's own recovery clause would send a changed file to
-# DEPO, which reloads the parsed content and cannot be re-run over content
-# that is already there. Hence one statement, and these guards.
+# Admin-only, and narrow on purpose.
 # --------------------------------------------------------------------------
-
-# Where to re-arm, keyed by the failure that stranded the entry: the inverse
-# of the backend's own error dispatch. All three re-enter through its export
-# step, which only reads the loaded content. DEPO is deliberately absent.
+#
+# (Workflow_Status, Process_Status) -> Workflow_Status to re-arm.
+# None in the first slot matches any workflow state; Errors in
+# Process_Status are unambiguous; Stranded entries can be rearmed to
+# the same Workflow_Status which triggered the Error.
+# "Success" is ambiguous on its own, so a success entry is only ever
+# matched with its workflow state named.
 REUPLOAD_STAGE = {
-    "Error: generating mmCIF file": "SUBMIT",
-    "Error: generating system files": "SUBMISSION COMPLETE",
-    "Error: releasing entry": "RELEASE READY",
+    (None, "Error: generating mmCIF file"):   "SUBMIT",
+    (None, "Error: generating system files"): "SUBMISSION COMPLETE",
+    (None, "Error: releasing entry"):         "RELEASE READY",
+    ("REL", "Success"): "DRAFT",
+    # ("HOLD", "Success"): "DRAFT",
+    # ("mmCIF CREATED", "Success"): "DRAFT",
 }
 DEPO_ERROR = "Error: processing uploaded mmCIF file"
+# Entries in these states may be mid-processing, so reupload refuses them.
+# This is checked *before* REUPLOAD_STAGE is looked up: a table key whose
+# first slot is one of these states can never match. Keep the two disjoint.
+NEVER_REARM_FROM = ("DEPO", "SUBMIT", "SUBMISSION COMPLETE", "RELEASE READY")
+# DEPO is not allowed below because the catalog needs to be cleared for reupload. 
+# Others are better set by the backend process
+NEVER_REARM_TO = ("REL", "HOLD", "mmCIF CREATED", "DEPO")
+
+
+def reupload_stage(workflow, process):
+    """The stage to re-arm, or None. An exact pair wins over a wildcard."""
+    return (REUPLOAD_STAGE.get((workflow, process))
+            or REUPLOAD_STAGE.get((None, process)))
+
+
+def describe_allowed():
+    return ", ".join("%s / %s" % (wf or "*", ps)
+                     for wf, ps in sorted(REUPLOAD_STAGE, key=lambda k: (k[0] or "", k[1])))
+
 
 # Exit codes, so a shell loop can tell "skip this one" from "stop". 0/1/2/3
 # keep get_status's meanings; 4 is new and means every later entry will fail
@@ -599,16 +551,23 @@ def reupload_verdict(row, new_md5):
                 "Manual_Processing is %r, not True: the entry is not parked, so the "
                 "backend may already have it" % (row["Manual_Processing"],), None)
 
-    state = row.get("Process_Status")
+    workflow, state = row.get("Workflow_Status"), row.get("Process_Status")
     if state == DEPO_ERROR:
         return (REUPLOAD_REFUSED,
                 "%r is retried at DEPO, which reloads the parsed content and cannot "
                 "be re-run over an entry that already holds it" % (state,), None)
-    stage = REUPLOAD_STAGE.get(state)
+    if workflow in NEVER_REARM_FROM:
+        return (REUPLOAD_REFUSED,
+                "Workflow_Status is %s; the backend may be working on it -- wait for it to "
+                "finish or fail, then retry" % workflow, None)
+    stage = reupload_stage(workflow, state)
     if stage is None:
         return (REUPLOAD_REFUSED,
-                "Process_Status is %r; only a failed export can be re-armed (%s)"
-                % (state, ", ".join(sorted(REUPLOAD_STAGE))), None)
+                "%s / %r is not a state reupload can re-arm (allowed: %s)"
+                % (workflow, state, describe_allowed()), None)
+    if stage in NEVER_REARM_TO:       # guards against a bad table entry
+        return (REUPLOAD_ENVIRONMENT,
+                "REUPLOAD_STAGE maps to %s, which is never a valid target" % stage, None)
     return REUPLOAD_OK, None, stage
 
 
@@ -651,6 +610,9 @@ def do_reupload(args):
           % (prep["name"], prep["size"], prep["md5"], row["mmCIF_File_MD5"]), file=sys.stderr)
     print("  hatrac  %s" % common.hatrac_target(asset, uid, prep["md5"], prep["ext"]),
           file=sys.stderr)
+    if stage == "DRAFT":
+        print("  note    DRAFT parks the entry; clear its parsed content before DEPO",
+              file=sys.stderr)
 
     if args.dry_run:
         print("dry run: nothing written", file=sys.stderr)
@@ -672,6 +634,9 @@ def do_reupload(args):
     # list, so the status code alone would report a typo'd RID as success.
     if len(updated) != 1:
         sys.exit("%s: the catalog matched no row; nothing was changed" % args.rid)
+    if stage == "DRAFT":
+        print("  parked at DRAFT: clear the parsed content before setting DEPO",
+              file=sys.stderr)
     print(args.rid)
 
 
@@ -688,7 +653,7 @@ def main():
         q.add_argument("file", nargs="?", help="mmCIF file to deposit")
         q.add_argument("--ihmcif", metavar="FILE",
                        help="same as the positional argument; accepted for clarity")
-        q.add_argument("--image", metavar="FILE", help="optional preview image (.png or .jpg)")
+        q.add_argument("--image", metavar="FILE", help="optional preview image (.png)")
         q.add_argument("--method", default="Integrative modeling", help="Method_Details value")
         q.add_argument("--draft", action="store_true",
                        help="create as DRAFT instead of DEPO, so nothing runs yet")
@@ -706,13 +671,6 @@ def main():
     q.add_argument("-v", "--verbose", action="store_true", help="print the full status detail")
     common.add_interval(q)
     q.set_defaults(func=do_run)
-
-    q = add("update", help="change an existing entry: add or replace its preview image")
-    q.add_argument("rid", help="the entry's RID")
-    q.add_argument("--image", metavar="FILE", help="preview image (.png or .jpg)")
-    q.add_argument("-f", "--force", action="store_true",
-                   help="replace an image the entry already has")
-    q.set_defaults(func=do_update)
 
     q = add("get_status", help="with RIDs: processing state, exit 0=done 1=error 2=pending "
                                "3=unknown. Without: list entries, newest first")
@@ -743,8 +701,8 @@ def main():
     q.add_argument("-y", "--yes", action="store_true", help="skip the confirmation prompt")
     q.set_defaults(func=do_delete)
 
-    q = add("reupload", help="admin: replace one entry's submitted mmCIF and re-arm "
-                             "the stage that failed on it (needs Manual_Processing)")
+    q = add("reupload", help="admin: replace one entry's submitted mmCIF and re-arm it "
+                             "(see REUPLOAD_STAGE)")
     q.add_argument("rid", help="the entry to repair; one per invocation, loop in the shell")
     q.add_argument("file", help="the corrected mmCIF to put in its place")
     q.add_argument("-n", "--dry-run", action="store_true",
