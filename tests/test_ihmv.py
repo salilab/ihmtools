@@ -4,6 +4,7 @@ import sys
 import types
 
 import pytest
+import requests
 
 from ihmtools import _common as common
 from ihmtools import ihmv
@@ -176,11 +177,19 @@ def test_broken_pipe_is_not_a_traceback(monkeypatch, capsys):
 # delete
 # --------------------------------------------------------------------------
 
-def deletion(monkeypatch, records, reports=(), others=()):
+def deletion(monkeypatch, records, reports=(), others=(), store_refuses=False):
     """Run do_delete over fake records; returns (catalog deletes, hatrac deletes)."""
     deleted, purged = [], []
     catalog = types.SimpleNamespace(delete=lambda path, **kw: deleted.append(path))
-    store = types.SimpleNamespace(del_obj=lambda path, **kw: purged.append(path))
+
+    def del_obj(path, **kw):
+        if store_refuses:       # what dev answers a submitter, owner or not
+            response = requests.Response()
+            response.status_code, response.url = 403, "https://h" + path
+            response._content = b"delete access forbidden."
+            raise requests.HTTPError(response=response)
+        purged.append(path)
+    store = types.SimpleNamespace(del_obj=del_obj)
     monkeypatch.setattr(ihmv, "connect", lambda: (catalog, store))
 
     def get(_c, path):
@@ -367,3 +376,16 @@ def test_download_keeps_the_rid_prefix_on_a_hostile_name(monkeypatch, tmp_path):
                                  summary=False, mmcif=True, outdir=str(tmp_path))
     ihmv.do_download(args)
     assert fetched == [str(tmp_path / "R_m.cif"), str(tmp_path / "GONE_x.cif")]
+
+
+def test_a_purge_the_server_refuses_is_reported_not_fatal(monkeypatch, capsys):
+    """Found on dev 199: submitters may not delete their own uploads, so the
+    purge used to fail the command after the records were already gone."""
+    deleted, purged = deletion(monkeypatch, [record("R")], store_refuses=True)
+    assert deleted == ["/entity/IHMV:Structure_mmCIF/RID=R"] and purged == []
+    assert "kept x.cif" in capsys.readouterr().err
+
+
+def test_a_shared_file_is_reported_once_when_refused(monkeypatch, capsys):
+    deletion(monkeypatch, [record("R1"), record("R2")], store_refuses=True)
+    assert capsys.readouterr().err.count("kept x.cif") == 1

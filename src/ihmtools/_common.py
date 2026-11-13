@@ -223,26 +223,36 @@ def check(call, *args, **kwargs):
     try:
         return call(*args, **kwargs)
     except requests.HTTPError as e:
-        r = e.response
-        if r is None:
-            raise
-        if r.status_code == 401:
-            raise NeedLogin("server rejected the token")
-        if r.status_code == 403:
-            # Authentication worked, so this is a permission -- but whose, and
-            # on what? Name the identity and the URL, pass on the server's own
-            # reason, and list the causes in the order they actually turn up.
-            tool = os.path.basename(sys.argv[0]) or "ihmv"
-            said = server_says(r)
-            sys.exit("Access denied: %s\n%s"
-                     "Authenticated as %s. Usually one of:\n"
-                     "  - the wrong account: %s logout, then %s login\n"
-                     "  - not your entry, or its state no longer allows this change\n"
-                     "  - an account not yet in the submitters' group: %s"
-                     % (r.url, "Server says: %s\n" % said if said else "",
-                        describe(identify(getattr(call, "__self__", None))),
-                        tool, tool, GROUP_SIGNUP))
-        sys.exit("%s %s\n%s" % (r.status_code, r.reason, server_says(r)))
+        fail(e, call)
+
+
+def fail(e, call=None):
+    """Turn one HTTPError into our own exit. Never returns.
+
+    Split out of check() so a caller that has to inspect a specific status
+    itself -- and so cannot hand the request to check() -- still reports every
+    other failure identically.
+    """
+    r = e.response
+    if r is None:
+        raise e
+    if r.status_code == 401:
+        raise NeedLogin("server rejected the token")
+    if r.status_code == 403:
+        # Authentication worked, so this is a permission -- but whose, and on
+        # what? Name the identity and the URL, pass on the server's own
+        # reason, and list the causes in the order they actually turn up.
+        tool = os.path.basename(sys.argv[0]) or "ihmv"
+        said = server_says(r)
+        sys.exit("Access denied: %s\n%s"
+                 "Authenticated as %s. Usually one of:\n"
+                 "  - the wrong account: %s logout, then %s login\n"
+                 "  - not your entry, or its state no longer allows this change\n"
+                 "  - an account not yet in the submitters' group: %s"
+                 % (r.url, "Server says: %s\n" % said if said else "",
+                    describe(identify(getattr(call, "__self__", None))),
+                    tool, tool, GROUP_SIGNUP))
+    sys.exit("%s %s\n%s" % (r.status_code, r.reason, server_says(r)))
 
 
 def server_says(r, limit=400):

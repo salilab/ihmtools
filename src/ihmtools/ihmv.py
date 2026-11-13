@@ -26,6 +26,7 @@ import sys
 import time
 import uuid
 
+import requests
 from deriva.core import urlquote
 
 from . import _common as common
@@ -303,15 +304,16 @@ def do_delete(args):
         print(rid)
 
     if args.purge_file:
-        purged = set()
+        seen = set()
         for rid in rids:
             md5, url = found[rid]["File_MD5"], found[rid]["File_URL"]
             # The object itself, not one version of it. A version suffix is
             # whatever follows the last ':' -- unless that is part of a path.
             base, colon, version = url.rpartition(":")
             path = base if colon and "/" not in version else url
-            if path in purged:
+            if path in seen:
                 continue        # two of the records just deleted shared it
+            seen.add(path)
             # Hatrac objects here are content-addressed, so one file can back
             # several records; only purge once nothing else references it.
             others = get(catalog, "/attribute/IHMV:Structure_mmCIF/File_MD5=%s/RID"
@@ -321,8 +323,15 @@ def do_delete(args):
                       % (url.rsplit("/", 1)[-1], ", ".join(r["RID"] for r in others)),
                       file=sys.stderr)
                 continue
-            check(store.del_obj, path)
-            purged.add(path)
+            try:
+                store.del_obj(path)
+            except requests.HTTPError as e:
+                if getattr(e.response, "status_code", None) != 403:
+                    common.fail(e, store.del_obj)
+                # The records are gone already; this only leaves a file behind.
+                print("  kept %s -- the server does not let this account delete "
+                      "uploaded files" % url.rsplit("/", 1)[-1], file=sys.stderr)
+                continue
             print("  purged %s" % url.rsplit("/", 1)[-1], file=sys.stderr)
 
 
@@ -428,8 +437,9 @@ def main():
     q = add("delete", help="delete entries and their generated reports")
     add_rids(q)
     q.add_argument("--purge-file", action="store_true",
-                   help="also delete the submitted file from Hatrac, "
-                        "unless another record shares it")
+                   help="also delete the submitted file from Hatrac, unless another "
+                        "record shares it. Curators only: the servers keep submitters' "
+                        "uploads, and then the file is reported as kept")
     q.add_argument("-y", "--yes", action="store_true", help="skip the confirmation prompt")
     q.set_defaults(func=do_delete)
 
