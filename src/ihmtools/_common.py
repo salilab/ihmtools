@@ -66,10 +66,12 @@ class NeedLogin(Exception):
 
 def configure(args, modes, env_prefix, default_mode=DEFAULT_MODE):
     """Resolve the target server: flags > --mode > environment > default."""
-    global SCHEME, HOST, CATALOG_ID, URL
+    global SCHEME, HOST, CATALOG_ID, URL, IDENTITY
     host, catalog = modes[default_mode]
-    host = os.environ.get(env_prefix + "_HOST", host)
-    catalog = os.environ.get(env_prefix + "_CATALOG", catalog)
+    # An empty variable is as good as unset: `IHMV_HOST= ihmv ...` must not
+    # leave a blank hostname behind.
+    host = os.environ.get(env_prefix + "_HOST") or host
+    catalog = os.environ.get(env_prefix + "_CATALOG") or catalog
     if getattr(args, "mode", None):
         host, catalog = modes[args.mode]
     host = getattr(args, "host", None) or host
@@ -81,6 +83,7 @@ def configure(args, modes, env_prefix, default_mode=DEFAULT_MODE):
     HOST = rest.strip("/")
     CATALOG_ID = str(catalog)
     URL = "%s://%s" % (SCHEME, HOST)
+    IDENTITY = None     # learnt from whichever server was configured before
 
 
 # --------------------------------------------------------------------------
@@ -110,20 +113,35 @@ def do_login(args):
 
 
 def do_logout(args):
-    """Revoke the tokens at Globus and forget them.
+    """Revoke this server's tokens at Globus and forget them.
 
-    Deleting the file alone would leave a working token behind for anything
-    that had already copied it, so revoke unless asked not to.
+    Only this server's: the token file is deriva-py's, shared with every other
+    DERIVA host and tool on the machine. Deleting the file alone would leave a
+    working token behind for anything that had already copied it, so revoke
+    unless asked not to.
     """
     gnl = _globus()
-    if not gnl.is_logged_in(hosts=[HOST]):
+    # The test get_credential() applies. Without exclude_defaults it also
+    # demands the openid/profile scopes, which an imported legacy token lacks,
+    # and so reports "not logged in" for a token every other command still uses.
+    tokens = gnl.is_logged_in(hosts=[HOST], exclude_defaults=True)
+    if not tokens:
         print("not logged in to %s" % HOST, file=sys.stderr)
         return
+    scopes = gnl.scope_set_from_scope_map(gnl.hosts_to_scope_map(hosts=[HOST]))
+    # get_credential() copied the bearer token into the bdbag keychain, and
+    # deriva-py's logout only removes a keychain entry it is handed the token
+    # for, which it never is. Remove it here, for either kind of logout.
+    for token in tokens.values():
+        if scopes & set(token["scope"].split()):
+            gnl.update_bdbag_keychain(token=token["access_token"], host=HOST, delete=True)
     if args.local:
-        gnl.client.token_storage.clear_tokens()
-        print("forgot local credentials; they are still valid at Globus")
+        gnl.client.token_storage.clear_tokens(scopes)
+        print("forgot local credentials for %s; they are still valid at Globus" % HOST)
     else:
-        gnl.logout(hosts=[HOST])
+        # exclude_defaults: the openid/profile tokens are not this server's,
+        # and other DERIVA hosts' logins lean on them.
+        gnl.logout(hosts=[HOST], exclude_defaults=True)
         print("revoked and removed credentials for %s" % HOST)
 
 
@@ -143,11 +161,22 @@ def adopt_legacy_tokens():
         entry = {k: entry[k] for k in TOKEN_GROUP_KEYS if k in entry}
         if not REQUIRED_TOKEN_KEYS.issubset(entry):
             return
-        DerivaJSONTokenStorage().write_tokens({entry["resource_server"]: entry})
+        # The store opens its file without creating the directory, and on a
+        # machine that never ran deriva-py before, ~/.deriva does not exist.
+        os.makedirs(os.path.dirname(DEFAULT_GLOBUS_CREDENTIAL_FILE), mode=0o700,
+                    exist_ok=True)
+        DerivaJSONTokenStorage(filename=DEFAULT_GLOBUS_CREDENTIAL_FILE).write_tokens(
+            {entry["resource_server"]: entry})
     except (OSError, ValueError, KeyError):
         return          # unreadable or not a token; the caller will ask for a login
     print("Imported credentials from %s into %s"
           % (LEGACY_TOKENS, DEFAULT_GLOBUS_CREDENTIAL_FILE), file=sys.stderr)
+    # Once only. Left in place, the old file would be imported again whenever
+    # deriva's file goes missing -- after a logout, say -- and log you back in.
+    try:
+        os.replace(LEGACY_TOKENS, LEGACY_TOKENS + ".imported")
+    except OSError:
+        pass
 
 
 def connect():
@@ -201,17 +230,26 @@ def check(call, *args, **kwargs):
             raise NeedLogin("server rejected the token")
         if r.status_code == 403:
             # Authentication worked, so this is a permission -- but whose, and
-            # on what? It is the catalog for an ERMrest path and the object for
-            # a Hatrac one, and in practice it is most often simply the wrong
-            # account, so name both the identity and the URL.
+            # on what? Name the identity and the URL, pass on the server's own
+            # reason, and list the causes in the order they actually turn up.
             tool = os.path.basename(sys.argv[0]) or "ihmv"
-            sys.exit("Access denied: %s\n"
-                     "Authenticated as %s, which is not permitted here.\n"
-                     "Wrong account? %s logout, then %s login.\n"
-                     "Otherwise request catalog membership: %s"
-                     % (r.url, describe(identify(getattr(call, "__self__", None))),
+            said = server_says(r)
+            sys.exit("Access denied: %s\n%s"
+                     "Authenticated as %s. Usually one of:\n"
+                     "  - the wrong account: %s logout, then %s login\n"
+                     "  - not your entry, or its state no longer allows this change\n"
+                     "  - an account not yet in the submitters' group: %s"
+                     % (r.url, "Server says: %s\n" % said if said else "",
+                        describe(identify(getattr(call, "__self__", None))),
                         tool, tool, GROUP_SIGNUP))
-        sys.exit("%s %s\n%s" % (r.status_code, r.reason, r.text[:400]))
+        sys.exit("%s %s\n%s" % (r.status_code, r.reason, server_says(r)))
+
+
+def server_says(r, limit=400):
+    """The server's own explanation, on one line. ERMrest and Hatrac answer in
+    plain text; a proxy in front of them may answer in HTML."""
+    text = re.sub(r"<[^>]*>", " ", r.text or "")
+    return " ".join(text.split())[:limit]
 
 
 def get(catalog, path):
@@ -282,6 +320,28 @@ def get_batched(catalog, before, values, after="", batch=BATCH):
 # --------------------------------------------------------------------------
 # uploads
 # --------------------------------------------------------------------------
+
+def taken(catalog, table, keys, values):
+    """My rows that a new row with `values` would collide with.
+
+    The catalogs keep some columns unique per account (RCB) -- one entry per
+    file, one per file name -- and the two servers do not agree on which (dev's
+    IHMV also keys on File_Name), so the keys are read from the table rather
+    than assumed. Checking here, before anything is uploaded, turns the bare
+    409 the insert would get into something the caller can explain.
+
+    keys: the table's "keys" list from /schema. Returns [(columns, row)].
+    """
+    me, out = mine(catalog), []        # one /authn/session, not one per key
+    for key in keys:
+        cols = [c for c in key["unique_columns"] if c != "RCB"]
+        if "RCB" not in key["unique_columns"] or not cols \
+                or not all(values.get(c) is not None for c in cols):
+            continue
+        where = "&".join("%s=%s" % (urlquote(c), urlquote(str(values[c]))) for c in cols)
+        for row in get(catalog, "/entity/%s/%s&%s" % (table, me, where)):
+            out.append((cols, row))
+    return out
 
 def hatrac_target(asset, uid, md5, ext):
     """Resolve an asset annotation's url_pattern for one file.
@@ -360,6 +420,8 @@ def salt_png(data, salt):
     Changes the md5 without touching a pixel, and keeps the file a valid PNG
     -- which appending bytes past IEND would leave to the decoder's mercy.
     """
+    if not data.startswith(b"\x89PNG\r\n\x1a\n") or b"IEND" not in data:
+        raise ValueError("not a PNG file")
     payload = b"Comment\0ihmtools-salt: " + salt.encode("latin-1")
     chunk = (struct.pack(">I", len(payload)) + b"tEXt" + payload
              + struct.pack(">I", zlib.crc32(b"tEXt" + payload) & 0xffffffff))
@@ -367,7 +429,19 @@ def salt_png(data, salt):
     return data[:iend] + chunk + data[iend:]
 
 
-SALTERS = {".cif": salt_mmcif, ".png": salt_png}
+def salt_jpeg(data, salt):
+    """A COM (comment) segment straight after the start-of-image marker.
+
+    The JPEG counterpart of the PNG tEXt chunk: decoders skip it, so the
+    pixels are untouched. The length field counts itself but not the marker.
+    """
+    if not data.startswith(b"\xff\xd8"):
+        raise ValueError("not a JPEG file")
+    payload = b"ihmtools-salt: " + salt.encode("latin-1")
+    return data[:2] + b"\xff\xfe" + struct.pack(">H", len(payload) + 2) + payload + data[2:]
+
+
+SALTERS = {".cif": salt_mmcif, ".png": salt_png, ".jpg": salt_jpeg, ".jpeg": salt_jpeg}
 
 
 def salted(path, salt, outdir):
@@ -388,10 +462,14 @@ def salted(path, salt, outdir):
             data = fh.read()
     except OSError as e:
         sys.exit("%s: %s" % (path, e.strerror or e))
+    try:
+        data = salter(data, salt)
+    except ValueError as e:         # the bytes do not match the extension
+        sys.exit("%s: cannot salt it: %s" % (path, e))
 
     out = os.path.join(outdir, "%s_%s%s" % (stem, salt, ext))
     with open(out, "wb") as fh:
-        fh.write(salter(data, salt))
+        fh.write(data)
     return out
 
 
@@ -468,7 +546,10 @@ def emit_table(headers, rows, right=(), notes=None):
     notes: optional per-row text; goes to stderr after its row so that stdout
     stays nothing but data.
     """
-    cells = [[("" if v is None else str(v)) for v in r] for r in rows]
+    # A tab or a newline inside a value (a multi-line Title) would split one
+    # row into several columns or lines downstream.
+    cells = [[("" if v is None else re.sub(r"[\t\r\n]+", " ", str(v))) for v in r]
+             for r in rows]
     head = ["#" + headers[0]] + list(headers[1:])
     notes = notes or [None] * len(cells)
 
@@ -530,9 +611,21 @@ def add_rids(q, what="one or more RIDs, or '-' to read them from stdin"):
     return q
 
 
+def seconds(text):
+    """A whole number of seconds, at least 1: 0 would poll the server
+    back to back, and a negative one only fails later, inside time.sleep."""
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError("not a whole number: %r" % text)
+    if value < 1:
+        raise argparse.ArgumentTypeError("must be at least 1 second")
+    return value
+
+
 def add_interval(q, default=POLL_INTERVAL):
     """Poll spacing, shared by the waiting commands."""
-    q.add_argument("--interval", type=int, default=default, metavar="SECS",
+    q.add_argument("--interval", type=seconds, default=default, metavar="SECS",
                    help="seconds between polls (default %(default)s)")
     return q
 

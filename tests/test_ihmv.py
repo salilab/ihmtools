@@ -35,6 +35,13 @@ def test_status_code(states, expected):
     assert ihmv.status_code(results) == expected
 
 
+@pytest.mark.parametrize("state", [None, "", "Something new"])
+def test_status_code_is_done_only_on_success(state):
+    """A record that exists is never "unknown RID", and only Success is done:
+    an empty or unexpected status must not let a script carry on."""
+    assert ihmv.status_code([("R", row(state))]) == 1
+
+
 # --------------------------------------------------------------------------
 # target resolution
 # --------------------------------------------------------------------------
@@ -169,34 +176,194 @@ def test_broken_pipe_is_not_a_traceback(monkeypatch, capsys):
 # delete
 # --------------------------------------------------------------------------
 
-def test_delete_skips_the_report_sweep_when_there_are_none(monkeypatch):
-    """ERMrest answers a delete matching nothing with 404, so an entry the
-    pipeline has not finished with yet could not be deleted at all."""
-    deleted = []
+def deletion(monkeypatch, records, reports=(), others=()):
+    """Run do_delete over fake records; returns (catalog deletes, hatrac deletes)."""
+    deleted, purged = [], []
     catalog = types.SimpleNamespace(delete=lambda path, **kw: deleted.append(path))
-    monkeypatch.setattr(ihmv, "connect", lambda: (catalog, None))
+    store = types.SimpleNamespace(del_obj=lambda path, **kw: purged.append(path))
+    monkeypatch.setattr(ihmv, "connect", lambda: (catalog, store))
+
+    def get(_c, path):
+        if "Generated_File" in path:
+            return [{"Structure_mmCIF": r} for r in reports]
+        if "/File_MD5=" in path:
+            return list(others)         # what still references the file
+        return records
+    monkeypatch.setattr(common, "get", get)     # what get_batched calls
+    monkeypatch.setattr(ihmv, "get", get)
+    ihmv.do_delete(types.SimpleNamespace(rids=[r["RID"] for r in records], rid_flags=None,
+                                         yes=True, purge_file=True))
+    return deleted, purged
+
+
+def record(rid, url="/hatrac/x.cif:V1"):
+    return {"RID": rid, "Title": "t", "Processing_Status": "Success",
+            "File_MD5": "m", "File_URL": url}
+
+
+@pytest.mark.parametrize("reports", [[], ["R"]])
+def test_delete_leaves_the_reports_to_the_cascade(monkeypatch, reports):
+    """Generated_File's FK cascades, and a submitter may not delete from it:
+    asking to was a 403 for every record that had reports."""
+    deleted, _ = deletion(monkeypatch, [record("R")], reports=reports)
+    assert deleted == ["/entity/IHMV:Structure_mmCIF/RID=R"]
+
+
+def test_purge_removes_the_object_not_a_version(monkeypatch):
+    _, purged = deletion(monkeypatch, [record("R")])
+    assert purged == ["/hatrac/x.cif"]
+
+
+def test_purge_removes_a_shared_file_once(monkeypatch):
+    """Two records just deleted together shared it: the second purge was a 404."""
+    _, purged = deletion(monkeypatch, [record("R1"), record("R2")])
+    assert purged == ["/hatrac/x.cif"]
+
+
+def test_purge_keeps_a_file_another_record_uses(monkeypatch):
+    _, purged = deletion(monkeypatch, [record("R")], others=[{"RID": "R9"}])
+    assert purged == []
+
+
+def test_purge_of_an_unversioned_url_keeps_the_whole_path(monkeypatch):
+    _, purged = deletion(monkeypatch, [record("R", url="https://h:443/hatrac/x.cif")])
+    assert purged == ["https://h:443/hatrac/x.cif"]
+
+
+# --------------------------------------------------------------------------
+# upload: the server's unique keys, checked before anything is uploaded
+# --------------------------------------------------------------------------
+
+class Answer:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def json(self):
+        return self.payload
+
+
+class StructureCatalog:
+    """IHMV:Structure_mmCIF as dev serves it: unique per submitter on the file,
+    the title and the file name."""
+
+    KEYS = [["RID"], ["RCB", "File_MD5"], ["RCB", "Title"], ["RCB", "File_Name"]]
+
+    def __init__(self, existing=()):
+        self.existing = list(existing)
+        self.inserts = []
+
+    def get_authn_session(self):
+        return Answer({"client": {"id": "https://auth.globus.org/ME"}})
+
+    def get(self, path):
+        if path == ihmv.ASSET_ANNOTATION:
+            return Answer({"url_pattern": "/hatrac/{{{md5}}}", "md5": "md5"})
+        if path == "/schema/IHMV/table/Structure_mmCIF":
+            return Answer({"keys": [{"unique_columns": k} for k in self.KEYS]})
+        if path.startswith("/entity/IHMV:Structure_mmCIF/RCB="):
+            terms = dict(t.split("=", 1) for t in path.split("/")[-1].split("&"))
+            terms.pop("RCB")
+            return Answer([e for e in self.existing
+                           if all(common.urlquote(str(e[c])) == v for c, v in terms.items())])
+        raise AssertionError("unexpected GET " + path)
+
+    def post(self, path, json):
+        self.inserts.append(json)
+        return Answer([dict(json[0], RID="NEW")])
+
+
+@pytest.fixture
+def submit(monkeypatch, tmp_path):
+    cif = tmp_path / "model.cif"
+    cif.write_text("data_X\n")
+    uploads = []
+
+    def run(existing=(), title=None, force=False):
+        catalog = StructureCatalog(existing)
+        monkeypatch.setattr(ihmv, "connect", lambda: (catalog, "store"))
+        monkeypatch.setattr(ihmv, "put_asset", lambda _s, prep, *a: uploads.append(prep) or {
+            "URL": "/hatrac/u", "Name": prep["name"], "MD5": prep["md5"], "Bytes": 7})
+        args = types.SimpleNamespace(file=str(cif), title=title, description=None,
+                                     force=force, salt=False)
+        return ihmv.do_upload(args), catalog
+
+    run.uploads = uploads
+    run.md5 = common.file_digest(str(cif))[0]
+    return run
+
+
+def mine_already(md5="other", title="t", name="other.cif"):
+    return {"RID": "OLD", "File_MD5": md5, "Title": title, "File_Name": name,
+            "Processing_Status": "Success"}
+
+
+def test_upload_inserts_when_nothing_clashes(submit):
+    rid, catalog = submit()
+    assert rid == "NEW" and len(catalog.inserts) == 1
+
+
+def test_upload_of_a_submitted_file_returns_its_record(submit, capsys):
+    rid, catalog = submit(existing=[mine_already(md5=submit.md5)], force=True)
+    assert rid == "OLD" and catalog.inserts == [] and submit.uploads == []
+    assert "set_status OLD --to Reprocess" in capsys.readouterr().err
+
+
+def test_upload_refuses_a_title_in_use_before_uploading(submit):
+    with pytest.raises(SystemExit) as caught:
+        submit(existing=[mine_already(title="mine")], title="mine")
+    assert "OLD" in str(caught.value) and "--title" in str(caught.value)
+    assert submit.uploads == []
+
+
+def test_upload_refuses_a_file_name_in_use_where_the_server_keys_on_it(submit):
+    with pytest.raises(SystemExit) as caught:
+        submit(existing=[mine_already(name="model.cif")])
+    assert "Rename the file" in str(caught.value)
+    assert submit.uploads == []
+
+
+# --------------------------------------------------------------------------
+# download
+# --------------------------------------------------------------------------
+
+def download(monkeypatch, tmp_path, records, reports):
+    fetched = []
+    store = types.SimpleNamespace(get_obj=lambda url, destfilename: fetched.append(destfilename))
+    monkeypatch.setattr(ihmv, "connect", lambda: (None, store))
     monkeypatch.setattr(common, "get", lambda _c, path: (
-        [] if "Generated_File" in path
-        else [{"RID": "R", "Title": "t", "Processing_Status": "In Progress",
-               "File_MD5": "m", "File_URL": "/hatrac/x"}]))
-
-    ihmv.do_delete(types.SimpleNamespace(rids=["R"], rid_flags=None, yes=True,
-                                         purge_file=False))
-    assert not any("Generated_File" in p for p in deleted)
-    assert any("Structure_mmCIF/RID=R" in p for p in deleted)
+        reports if "Generated_File" in path else records))
+    args = types.SimpleNamespace(rids=["R", "GONE"], rid_flags=None, full=False,
+                                 summary=False, mmcif=False, outdir=str(tmp_path))
+    with pytest.raises(SystemExit) as caught:
+        ihmv.do_download(args)
+    return caught.value.code, fetched
 
 
-def test_delete_sweeps_reports_when_there_are_some(monkeypatch):
-    deleted = []
-    catalog = types.SimpleNamespace(delete=lambda path, **kw: deleted.append(path))
-    monkeypatch.setattr(ihmv, "connect", lambda: (catalog, None))
+def test_download_tells_an_unknown_rid_from_a_missing_report(monkeypatch, tmp_path, capsys):
+    code, _ = download(monkeypatch, tmp_path, [{"RID": "R", "File_Name": "m.cif",
+                                                "File_URL": "/u"}], [])
+    assert code == 3, "a wrong RID exits 3, as get_status does"
+    err = capsys.readouterr().err
+    assert "GONE: unknown RID" in err and "R: nothing to download yet" in err
+
+
+def test_download_never_writes_outside_the_directory(monkeypatch, tmp_path):
+    report = {"Structure_mmCIF": "R", "File_Type": "Validation: Full PDF",
+              "File_Name": "../../escape.pdf", "File_URL": "/u"}
+    _, fetched = download(monkeypatch, tmp_path,
+                          [{"RID": "R", "File_Name": "m.cif", "File_URL": "/u"}], [report])
+    assert fetched == [str(tmp_path / "escape.pdf")]
+
+
+def test_download_keeps_the_rid_prefix_on_a_hostile_name(monkeypatch, tmp_path):
+    records = [{"RID": "R", "File_Name": "sub/m.cif", "File_URL": "/u"},
+               {"RID": "GONE", "File_Name": "x.cif", "File_URL": "/v"}]
+    fetched = []
+    store = types.SimpleNamespace(get_obj=lambda url, destfilename: fetched.append(destfilename))
+    monkeypatch.setattr(ihmv, "connect", lambda: (None, store))
     monkeypatch.setattr(common, "get", lambda _c, path: (
-        [{"Structure_mmCIF": "R"}] if "Generated_File" in path
-        else [{"RID": "R", "Title": "t", "Processing_Status": "Success",
-               "File_MD5": "m", "File_URL": "/hatrac/x"}]))
-
-    ihmv.do_delete(types.SimpleNamespace(rids=["R"], rid_flags=None, yes=True,
-                                         purge_file=False))
-    # Reports first: a failure on the second call must leave the record behind
-    # to retry, not orphan its reports.
-    assert [("Generated_File" in p) for p in deleted] == [True, False]
+        [] if "Generated_File" in path else records))
+    args = types.SimpleNamespace(rids=["R", "GONE"], rid_flags=None, full=False,
+                                 summary=False, mmcif=True, outdir=str(tmp_path))
+    ihmv.do_download(args)
+    assert fetched == [str(tmp_path / "R_m.cif"), str(tmp_path / "GONE_x.cif")]

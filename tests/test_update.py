@@ -25,9 +25,11 @@ class FakeResponse:
 
 
 class EntryCatalog:
-    def __init__(self, entry, may_update=True):
+    def __init__(self, entry, may_update=True, tcrs=True, vanished=False):
         self.entry = entry
         self.may_update = may_update
+        self.tcrs = tcrs            # False: the server sent tcrs as null
+        self.vanished = vanished    # deleted between the read and the write
         self.updates = []
 
     def get(self, path):
@@ -39,10 +41,12 @@ class EntryCatalog:
                 return FakeResponse([])
             rights = {c: self.may_update for c in ihmdep.IMAGE_COLUMNS}
             return FakeResponse([dict(self.entry, tcrs={
-                "update": self.may_update, "column_update": rights})])
+                "update": self.may_update, "column_update": rights} if self.tcrs else None)])
         raise AssertionError("unexpected GET " + path)
 
     def put(self, path, json):
+        if self.vanished:
+            return FakeResponse([])     # a key matching nothing: 200, empty
         self.updates.append((path, json))
         return FakeResponse(json)
 
@@ -169,3 +173,28 @@ def test_update_parses(monkeypatch):
                         ["ihmdep", "--mode", "dev", "update", "5-ABCD", "--image", "x.png", "-f"])
     ihmdep.main()
     assert (seen["rid"], seen["image"], seen["force"]) == ("5-ABCD", "x.png", True)
+
+
+def test_a_locked_entry_is_not_offered_force(update):
+    """Suggesting --force for a change the server will refuse anyway sent people
+    round in a circle: --force, then "can no longer be changed"."""
+    catalog = EntryCatalog(entry(OWN_IMAGE, workflow="SUBMIT"), may_update=False)
+    with pytest.raises(SystemExit) as caught:
+        update(catalog)
+    assert "can no longer be changed" in str(caught.value)
+    assert "--force" not in str(caught.value)
+
+
+def test_null_tcrs_is_a_refusal_not_a_crash(update):
+    catalog = EntryCatalog(entry(PLACEHOLDER), tcrs=False)
+    with pytest.raises(SystemExit) as caught:
+        update(catalog)
+    assert "can no longer be changed" in str(caught.value)
+    assert catalog.updates == []
+
+
+def test_an_entry_gone_before_the_write_is_reported(update):
+    catalog = EntryCatalog(entry(PLACEHOLDER), vanished=True)
+    with pytest.raises(SystemExit) as caught:
+        update(catalog)
+    assert "nothing was changed" in str(caught.value)

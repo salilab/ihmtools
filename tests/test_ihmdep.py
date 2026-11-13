@@ -51,8 +51,13 @@ def test_success_is_neither():
     ([("DEPO", "Error: processing uploaded mmCIF file")], 1),
     ([("DEPO", "In progress: generating mmCIF file")], 2),
     ([("DRAFT", None)], 2),
+    # What a DRAFT really carries: the column default. Not finished, so 2.
+    ([("DRAFT", "New (trigger backend process)")], 2),
     # Workflow_Status alone can carry the failure.
     ([("ERROR", "Success")], 1),
+    # ERROR is final, whatever Process_Status still says.
+    ([("ERROR", None)], 1),
+    ([("ERROR", "New (trigger backend process)")], 1),
     # Pending outranks Error across a batch.
     ([("DEPO", "Error: generating mmCIF file"), ("DEPO", "In progress: releasing entry")], 2),
 ])
@@ -343,3 +348,66 @@ def test_status_flags_parse(monkeypatch, flag):
     args = parse(argv)
     assert getattr(args, flag) is True
     assert args.rids == ["R"], "a status flag must not swallow the RID"
+
+
+# --------------------------------------------------------------------------
+# get_status --wait: poll only while the backend has something to do
+# --------------------------------------------------------------------------
+
+def wait_on(monkeypatch, polls):
+    """Run `get_status --wait` over successive canned polls; returns (exit, sleeps)."""
+    polls = list(polls)
+    sleeps = []
+    monkeypatch.setattr(ihmdep, "poll_status", lambda _r, _v: [(r["RID"], r) for r in polls.pop(0)])
+    monkeypatch.setattr(ihmdep.time, "sleep", sleeps.append)
+    args = types.SimpleNamespace(rids=["A"], rid_flags=None, verbose=False, wait=True,
+                                 interval=7, workflow=False, process=False)
+    with pytest.raises(SystemExit) as caught:
+        ihmdep.do_status(args)
+    return caught.value.code, sleeps
+
+
+def test_wait_does_not_hang_on_a_draft(monkeypatch, capsys):
+    """A DRAFT shows "New (trigger backend process)" but nothing will run."""
+    draft = {"RID": "A", "Workflow_Status": "DRAFT", "Process_Status": "New (trigger backend process)"}
+    code, sleeps = wait_on(monkeypatch, [[draft]])
+    assert (code, sleeps) == (2, [])
+    assert "set_status A --to DEPO" in capsys.readouterr().err
+
+
+def test_wait_polls_until_the_backend_is_done(monkeypatch):
+    running = {"RID": "A", "Workflow_Status": "DEPO", "Process_Status": "In progress: x"}
+    done = {"RID": "A", "Workflow_Status": "RECORD READY", "Process_Status": "Success"}
+    code, sleeps = wait_on(monkeypatch, [[running], [running], [done]])
+    assert (code, sleeps) == (0, [7, 7])
+
+
+def test_wait_stops_on_an_error_entry(monkeypatch):
+    failed = {"RID": "A", "Workflow_Status": "ERROR", "Process_Status": None}
+    code, sleeps = wait_on(monkeypatch, [[failed]])
+    assert (code, sleeps) == (1, [])
+
+
+# --------------------------------------------------------------------------
+# download
+# --------------------------------------------------------------------------
+
+def test_download_exits_3_on_an_unknown_rid_and_stays_in_its_directory(
+        monkeypatch, tmp_path, capsys):
+    fetched = []
+    store = types.SimpleNamespace(get_obj=lambda url, destfilename: fetched.append(destfilename))
+    monkeypatch.setattr(ihmdep, "connect", lambda: (None, store))
+
+    def get(_c, path):
+        if "Entry_Generated_File" in path:
+            return [{"Structure_Id": "D_R", "File_Type": "mmCIF",
+                     "File_Name": "../D_R.cif", "File_URL": "/u"}]
+        return [{"RID": "R", "id": "D_R"}]
+    monkeypatch.setattr(ihmdep.common, "get", get)
+    args = types.SimpleNamespace(rids=["R", "GONE"], rid_flags=None, mmcif=False, full=False,
+                                 summary=False, logs=False, outdir=str(tmp_path))
+    with pytest.raises(SystemExit) as caught:
+        ihmdep.do_download(args)
+    assert caught.value.code == 3
+    assert fetched == [str(tmp_path / "D_R.cif")]
+    assert "GONE: unknown RID" in capsys.readouterr().err
