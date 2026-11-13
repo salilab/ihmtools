@@ -182,12 +182,12 @@ Every `ihmdep` subcommand is designed to compose cleanly in shell pipelines:
    done > rids.txt
    ```
    - `--mode dev` targets the development server (`data-dev.pdb-ihm.org`,
-     catalog `199`) rather than the live archive (`ihmdep` defaults to
+     catalog `99`) rather than the live archive (`ihmdep` defaults to
      production).
    - `upload` transfers the `.cif` and `.png` to Hatrac, creates the
-     `entry` row in ERMrest, transitions `Workflow_Status` from `DRAFT` to
-     `DEPO` so the backend processor starts immediately, and prints **only**
-     the resulting RID (e.g., `9-ENB2`) on `stdout`.
+     `entry` row in ERMrest directly as `DEPO` (`--draft` would park it as
+     `DRAFT` instead) so the backend processor starts immediately, and prints
+     **only** the resulting RID (e.g., `9-ENB2`) on `stdout`.
    - If one file in the loop fails to upload, diagnostics go to `stderr` and
      nothing is written to `stdout`, so `rids.txt` collects only the RIDs that
      succeeded.
@@ -258,9 +258,9 @@ done > rids.txt
 `--salt` writes temporary copies with a unique timestamp comment appended to
 the `.cif` (`# ihmtools-salt: ...`) and a `tEXt` chunk added to the `.png`,
 giving both files new filenames and new MD5 checksums so the server creates a
-brand-new `DRAFT -> DEPO` record every time. (If you intentionally want to
-create a second record from the exact same bytes on disk without salting, pass
-`--force` instead.)
+brand-new `DEPO` entry every time. There is no unsalted way to deposit the
+same bytes twice: the server keeps one entry per file (and per file name) for
+each account, so `--force` has no effect.
 
 ---
 
@@ -297,18 +297,24 @@ status:
 | Exit code | Meaning |
 |---|---|
 | `0` | All queried entries finished (`Success`) |
-| `1` | At least one entry failed (`Error...` / `Failed...`) |
-| `2` | At least one entry is still running or queued and none failed |
+| `1` | At least one entry failed (`Error...`, or `Workflow_Status` `ERROR`) |
+| `2` | At least one entry is still running, queued or `DRAFT` — this outranks a failure, so a batch keeps polling |
 | `3` | An unknown RID was requested |
 
 ### Filtering tab-separated listings
 
-With no RID arguments (or with multiple RIDs), `ihmdep get_status` prints a
-table. On a terminal the columns are padded for human reading; when piped or
-redirected, output is strictly **tab-separated** (`RID`, `Filename`, `Title`,
-`Workflow_Status`, `Process_Status`, `Creation_Time`, plus `Image_Filename` and
-`Issue` under `-v`) with a `#`-prefixed header line. Because both `Title` and
-the status columns can contain spaces, always split on `\t`:
+With no RID arguments, or with several, `ihmdep get_status` prints a table.
+On a terminal the columns are padded for human reading; when piped or
+redirected, output is strictly **tab-separated** with a `#`-prefixed header
+line. The columns depend on the form:
+
+- no RIDs (the listing), or any RIDs with `-v`: `RID`, `MODIFIED`,
+  `ACCESSION`, `WORKFLOW`, `PROCESS`, `FILE`; under `-v` each row's
+  `Record_Status_Detail` follows it on `stderr`;
+- several RIDs: `RID`, `WORKFLOW`, `PROCESS`.
+
+Because the status columns and file names can contain spaces, always split
+on `\t`:
 
 ```bash
 # List RIDs of entries whose backend run failed:
@@ -316,5 +322,5 @@ ihmdep --mode dev get_status | awk -F'\t' '!/^#/ && $5 ~ /^Error/ {print $1}'
 
 # List RIDs in rids.txt that are RECORD READY and ready to SUBMIT:
 ihmdep --mode dev get_status - < rids.txt |
-    awk -F'\t' '!/^#/ && $4 == "RECORD READY" && $5 == "Success" {print $1}'
+    awk -F'\t' '!/^#/ && $2 == "RECORD READY" && $3 == "Success" {print $1}'
 ```
