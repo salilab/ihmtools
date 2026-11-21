@@ -25,7 +25,7 @@ that differs here follows from the model being **multi-scale coarse-grained**:
   AlphaFold/AlphaPulldown model (`ma-pgtjz`) are represented as **rigid
   1-residue spheres** (`ResidueSegment`), while unmodeled linker and tail
   regions are represented as **flexible multi-residue spheres**
-  (`FeatureSegment`, up to 10 residues per bead).
+  (`FeatureSegment`, up to 20 residues per bead).
 - Because a multi-residue sphere has no single-residue coordinate, crosslink
   restraints carry a representation-dependent granularity
   (`_ihm_cross_link_restraint.model_granularity`): `by-residue`
@@ -118,7 +118,7 @@ relative to PDB `9FSO` chain `W`), and a C-terminal `Ala-His10` tag (`seq_id`
 
 Because `Entity.residue()` takes an entity `seq_id`, crosslink positions for
 subunit 4 in `data/crosslinks.csv` include the 40-residue N-terminal tag offset
-(for example, `residue1 = 41` in crosslink `241` is `Asp41` of the construct,
+(for example, `residue2 = 41` in crosslink `174` is `Asp41` of the construct,
 corresponding to `Asp2` of UniProt `Q5SXM2`).
 
 ### `data/crosslinks.csv`
@@ -270,10 +270,11 @@ Each row in `_ihm_sphere_obj_site` covers a residue span `seq_id_begin..end` on
 one chain. Where `begin == end`, a single residue is represented by its own
 sphere; contiguous runs of 1-residue spheres form a rigid `ResidueSegment`
 (`model_mode = rigid`, `model_granularity = by-residue`). Where `begin < end`
-(for example, `1..10` or `11..20` on chain `A`), multiple residues are grouped
-into one coarse sphere; each coarse sphere becomes a flexible `FeatureSegment`
-(`model_mode = flexible`, `model_granularity = by-feature`,
-`model_object_count = 1`). Notice that chain `E` spheres start at
+(for example, `1..10` and `11..20` on chain `A`), multiple residues are grouped
+into one coarse sphere; contiguous stretches of equal-size coarse spheres form a
+flexible `FeatureSegment` (`model_mode = flexible`,
+`model_granularity = by-feature`, with `model_object_count` equal to the number
+of spheres in the segment). Notice that chain `E` spheres start at
 `seq_id_begin = 41`, so the unmodeled N-terminal tag (`seq_id` 1–40) is
 automatically excluded from the representation segments:
 
@@ -292,21 +293,21 @@ for chain, asym in asyms.items():
     for _, begin, end, *_rest in sorted(runs, key=lambda s: s[1]):
         size = end - begin + 1
         if current and current[2] == size and begin == current[1] + 1:
-            current = (current[0], end, size)
+            current = (current[0], end, size, current[3] + 1)
             continue
         if current:
-            segments.append((asym, current[0], current[1], current[2]))
-        current = (begin, end, size)
+            segments.append((asym, *current))
+        current = (begin, end, size, 1)
     if current:
-        segments.append((asym, current[0], current[1], current[2]))
+        segments.append((asym, *current))
 
 representation = ihm.representation.Representation([
     ihm.representation.ResidueSegment(asym(begin, end), rigid=True,
                                       primitive="sphere")
     if size == 1 else
     ihm.representation.FeatureSegment(asym(begin, end), rigid=False,
-                                      primitive="sphere", count=1)
-    for asym, begin, end, size in segments])
+                                      primitive="sphere", count=count)
+    for asym, begin, end, size, count in segments])
 ```
 
 This writes 40 representation segments to `_ihm_entity_poly_segment` (plus 5
@@ -346,7 +347,7 @@ _ihm_model_representation_details.model_granularity
 _ihm_model_representation_details.model_object_count
 _ihm_model_representation_details.description
 1 1 1 'snRNA-activating protein complex subunit 2' A 1 sphere . flexible
-by-feature 1 .
+by-feature 2 .
 2 1 1 'snRNA-activating protein complex subunit 2' A 2 sphere . flexible
 by-feature 1 .
 3 1 1 'snRNA-activating protein complex subunit 2' A 3 sphere . rigid by-residue
@@ -506,8 +507,8 @@ In `data/assembled.cif`, notice how crosslink `6` (touching `seq_id = 35` in
 subunit 4's unmodeled tag) is present in `_ihm_cross_link_list` but skipped in
 `_ihm_cross_link_restraint` (where restraint `5` maps to `group_id = 5` and
 restraint `6` jumps to `group_id = 7`), and how restraint `10` (`group_id = 11`
-at subunit 1 `His119–Lys314`, where `Lys314` lies in the 10-residue bead
-`305..314`) has `model_granularity = by-feature`:
+at subunit 1 `His119–Lys314`, where `Lys314` lies in the 20-residue bead
+`295..314`) has `model_granularity = by-feature`:
 
 ```cif
 loop_

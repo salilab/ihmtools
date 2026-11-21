@@ -12,7 +12,7 @@ explains it, shows the code that records it, and shows the mmCIF rows that
 code produces. The last two sections cover what the script deliberately
 leaves out and what to change for your own entry.
 
-[entry]: https://pdb-ihm.org/entry/9A9W
+[entry]: https://pdb-ihm.org/entry.html?9A9W
 
 ## What it builds
 

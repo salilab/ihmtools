@@ -60,7 +60,7 @@ differs follows from one thing: whether the model is atomic or coarse-grained.
 | read with | `gemmi.read_structure()` | `_ihm_sphere_obj_site` directly — gemmi sees an empty structure |
 | representation | atomic segments | multi-scale: rigid by-residue, flexible multi-residue beads |
 | crosslinks | 51, all `ResidueCrossLink` | 251: **127 residue + 124 feature** |
-| why two kinds | — | a bead spanning ten residues cannot be restrained at one of them |
+| why two kinds | — | a bead spanning several residues cannot be restrained at one of them |
 | linker | DSSO, 30 Å | SDA, 22 Å, with `psi` and `sigma` from the IMP fit |
 | protocol | five fitting and refinement steps | replica-exchange MC, then RMSD clustering |
 

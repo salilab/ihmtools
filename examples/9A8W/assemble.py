@@ -131,9 +131,9 @@ assembly = ihm.Assembly(list(asyms.values()), name="Modeled assembly")
 # residues 1..40, an N-terminal tag) have no spheres.
 #
 # A one-residue sphere (begin == end) is a residue-level bead from a known
-# structure, sampled as a rigid body (ResidueSegment). A multi-residue sphere
-# (begin < end) is a flexible coarse bead for a region without structure
-# (FeatureSegment, count=1 sphere per segment).
+# structure, sampled as a rigid body (ResidueSegment). Contiguous stretches
+# of equal-size multi-residue spheres (begin < end) become a flexible
+# FeatureSegment whose count is the number of spheres in the stretch.
 #
 # Writes: _ihm_entity_poly_segment, _ihm_model_representation, and
 # _ihm_model_representation_details. (To also populate
@@ -155,21 +155,21 @@ for chain, asym in asyms.items():
     for _, begin, end, *_rest in sorted(runs, key=lambda s: s[1]):
         size = end - begin + 1
         if current and current[2] == size and begin == current[1] + 1:
-            current = (current[0], end, size)
+            current = (current[0], end, size, current[3] + 1)
             continue
         if current:
-            segments.append((asym, current[0], current[1], current[2]))
-        current = (begin, end, size)
+            segments.append((asym, *current))
+        current = (begin, end, size, 1)
     if current:
-        segments.append((asym, current[0], current[1], current[2]))
+        segments.append((asym, *current))
 
 representation = ihm.representation.Representation([
     ihm.representation.ResidueSegment(asym(begin, end), rigid=True,
                                       primitive="sphere")
     if size == 1 else
     ihm.representation.FeatureSegment(asym(begin, end), rigid=False,
-                                      primitive="sphere", count=1)
-    for asym, begin, end, size in segments])
+                                      primitive="sphere", count=count)
+    for asym, begin, end, size, count in segments])
 
 # --------------------------------------------------------------------------
 # CHANGE FOR YOUR ENTRY: experimental datasets and starting-model archives.

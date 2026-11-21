@@ -52,14 +52,12 @@ crosslinking mass spectrometry (SDA) and deep learning:
   `GREA_BACSU` (`P80240`), with 13 inter-protein identified crosslinks and 13
   inter-molecular `by-residue` restraints.
 
-Alongside the three input pairs (`9A40`, `9A6P`, `9A7U`), `reports/` holds
-three pipeline-generated mmCIF files (`D_9-ENB2.cif`, `D_9-ENB4.cif`,
-`D_9-ENB6.cif`) downloaded from a previous dev-server run of the batch loop
-above (`9-ENB2` ← `9A40`, `9-ENB4` ← `9A6P`, `9-ENB6` ← `9A7U`). Comparing
-`9A7U.cif` against `reports/D_9-ENB6.cif` shows what the deposition server's
-post-`SUBMIT` processor rewrites: `data_9A7U` and `_entry.id` become the
-deposition ID (`D_9-ENB6`), archive-release categories (`_database_2`,
-`_pdbx_database_status`, `_pdbx_audit_revision_history`,
+After running the batch loop above, `generated/` holds the pipeline-generated
+mmCIF files (`D_<RID>.cif`, one per entry; gitignored). Comparing an input file
+such as `9A7U.cif` against its downloaded `generated/D_<RID>.cif` shows what the
+deposition server's post-`SUBMIT` processor rewrites: `data_9A7U` and
+`_entry.id` become the deposition ID (`D_<RID>`), archive-release categories
+(`_database_2`, `_pdbx_database_status`, `_pdbx_audit_revision_history`,
 `_ihm_entry_collection*`) are replaced by the deposition workflow's own frame,
 and `_audit_conform` is stamped with the server's active dictionary versions.
 
