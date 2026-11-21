@@ -6,4 +6,4 @@ they have in common -- authentication, uploads, polling and the CLI
 conventions -- lives once, in `_common`.
 """
 
-__version__ = "0.0.1a14"
+__version__ = "0.0.1a15"
